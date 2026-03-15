@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { useQueryClient } from '@tanstack/react-query'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,8 +22,16 @@ export function AddEmployeeDialog({ open, onOpenChange }: Props) {
   const [step, setStep] = useState('')
   const [error, setError] = useState<string | null>(null)
 
+  const queryClient = useQueryClient()
   const { writeContract, data: hash, isPending, error: txError } = useWriteContract()
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash })
+
+  // Refresh all contract reads after successful transaction
+  useEffect(() => {
+    if (isSuccess) {
+      queryClient.invalidateQueries()
+    }
+  }, [isSuccess, queryClient])
 
   const handleSubmit = async () => {
     if (!address || !employeeAddress || !salary) return

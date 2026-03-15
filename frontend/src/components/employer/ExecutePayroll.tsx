@@ -1,10 +1,13 @@
+import { useEffect } from 'react'
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract } from 'wagmi'
+import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, Lock, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ConfidentialPayrollABI, PayrollTokenABI, PAYROLL_MANAGER_ADDRESS, PAYROLL_TOKEN_ADDRESS } from '@/lib/contracts'
 
 export function ExecutePayroll() {
   const { address } = useAccount()
+  const queryClient = useQueryClient()
 
   const { data: activeCount } = useReadContract({
     address: PAYROLL_MANAGER_ADDRESS as `0x${string}`,
@@ -24,6 +27,13 @@ export function ExecutePayroll() {
 
   const { writeContract: execPayroll, data: payrollHash, isPending: isExecuting } = useWriteContract()
   const { isLoading: isPayrollConfirming, isSuccess: isPayrollDone } = useWaitForTransactionReceipt({ hash: payrollHash })
+
+  // Refresh reads after approve or payroll
+  useEffect(() => {
+    if (isApproved || isPayrollDone) {
+      queryClient.invalidateQueries()
+    }
+  }, [isApproved, isPayrollDone, queryClient])
 
   const handleApproveOperator = () => {
     const until = Math.floor(Date.now() / 1000) + 365 * 24 * 3600
