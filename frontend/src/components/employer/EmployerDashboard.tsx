@@ -71,11 +71,11 @@ export function EmployerDashboard() {
           <p className="mt-1 text-sm text-muted-foreground">Manage employees and execute encrypted payroll</p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => setIsBatchDialogOpen(true)} size="sm" variant="outline" className="gap-1.5">
+          <Button onClick={() => setIsBatchDialogOpen(true)} variant="outline" className="gap-1.5">
             <Users className="size-4" />
             Batch add
           </Button>
-          <Button onClick={() => setIsAddDialogOpen(true)} size="sm" className="gap-1.5">
+          <Button onClick={() => setIsAddDialogOpen(true)} className="gap-1.5">
             <Plus className="size-4" />
             Add employee
           </Button>

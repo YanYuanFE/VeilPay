@@ -145,7 +145,7 @@ export function BatchAddDialog({ open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={processing ? undefined : onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>Batch add employees</DialogTitle>
           <DialogDescription>
@@ -166,11 +166,11 @@ export function BatchAddDialog({ open, onOpenChange }: Props) {
               />
               <Input
                 type="number"
-                placeholder="Salary"
+                placeholder="Salary (USD)"
                 value={row.salary}
                 onChange={(e) => updateRow(i, 'salary', e.target.value)}
                 disabled={processing}
-                className="w-28"
+                className="w-36"
               />
               {rowStatuses[i] ? (
                 <span className={`text-xs w-24 truncate ${statusColor(rowStatuses[i])}`}>
@@ -196,8 +196,8 @@ export function BatchAddDialog({ open, onOpenChange }: Props) {
         </div>
 
         {!processing && (
-          <Button variant="ghost" size="sm" onClick={addRow} className="gap-1.5 w-fit">
-            <Plus className="size-3.5" /> Add row
+          <Button variant="ghost" onClick={addRow} className="gap-1.5 w-fit">
+            <Plus className="size-4" /> Add row
           </Button>
         )}
 

@@ -107,15 +107,14 @@ export function SalaryCard() {
             onClick={handleDecryptSalary}
             disabled={isDecrypting || !walletClient}
             variant="outline"
-            size="sm"
             className="gap-1.5"
           >
             {isDecrypting ? (
-              <Loader2 className="size-3.5 animate-spin" />
+              <Loader2 className="size-4 animate-spin" />
             ) : showSalary ? (
-              <EyeOff className="size-3.5" />
+              <EyeOff className="size-4" />
             ) : (
-              <Eye className="size-3.5" />
+              <Eye className="size-4" />
             )}
             {isDecrypting ? 'Decrypting…' : showSalary ? 'Hide' : 'Decrypt & view'}
           </Button>
@@ -140,15 +139,14 @@ export function SalaryCard() {
             onClick={handleDecryptBalance}
             disabled={isDecrypting || !walletClient}
             variant="outline"
-            size="sm"
             className="gap-1.5"
           >
             {isDecrypting ? (
-              <Loader2 className="size-3.5 animate-spin" />
+              <Loader2 className="size-4 animate-spin" />
             ) : showBalance ? (
-              <EyeOff className="size-3.5" />
+              <EyeOff className="size-4" />
             ) : (
-              <Eye className="size-3.5" />
+              <Eye className="size-4" />
             )}
             {isDecrypting ? 'Decrypting…' : showBalance ? 'Hide' : 'Decrypt & view'}
           </Button>
