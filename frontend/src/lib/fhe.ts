@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { SEPOLIA_RPC_URL } from './contracts'
+
 // FHE instance via CDN-loaded @zama-fhe/relayer-sdk (window.relayerSDK)
 
 let fheInstance: any = null
@@ -30,7 +32,7 @@ export async function getFHEInstance() {
 
       const config = {
         ...sdk.SepoliaConfig,
-        network: 'https://ethereum-sepolia-rpc.publicnode.com',
+        network: SEPOLIA_RPC_URL,
       }
 
       const instance = await sdk.createInstance(config)

@@ -1,3 +1,4 @@
+export const SEPOLIA_RPC_URL = import.meta.env.VITE_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com'
 export const PAYROLL_TOKEN_ADDRESS = import.meta.env.VITE_TOKEN_ADDRESS || '0xa6daf4C41b62Be614c9596828C371492E7109FFc'
 export const PAYROLL_MANAGER_ADDRESS = import.meta.env.VITE_PAYROLL_ADDRESS || '0x914B2b9bbe76C4BA1Ec35785791Ada874Af5801b'
 
