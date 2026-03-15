@@ -18,7 +18,7 @@ export function SalaryCard() {
 
   // These return encrypted handles (uint256) — ciphertext pointers, not values
   // `account` is required so msg.sender is set correctly in the static call
-  const { data: salaryHandle, error: salaryError } = useReadContract({
+  const { data: salaryHandle } = useReadContract({
     address: PAYROLL_MANAGER_ADDRESS as `0x${string}`,
     abi: ConfidentialPayrollABI,
     functionName: 'getMySalary',
@@ -26,7 +26,7 @@ export function SalaryCard() {
     query: { enabled: !!address },
   })
 
-  const { data: balanceHandle, error: balanceError } = useReadContract({
+  const { data: balanceHandle } = useReadContract({
     address: PAYROLL_TOKEN_ADDRESS as `0x${string}`,
     abi: PayrollTokenABI,
     functionName: 'confidentialBalanceOf',
@@ -35,9 +35,6 @@ export function SalaryCard() {
     query: { enabled: !!address },
   })
 
-  // Debug: log handle fetch status
-  console.log('[SalaryCard] salaryHandle:', salaryHandle, 'error:', salaryError?.message)
-  console.log('[SalaryCard] balanceHandle:', balanceHandle, 'error:', balanceError?.message)
 
   const handleDecryptSalary = async () => {
     if (decryptedSalary) {

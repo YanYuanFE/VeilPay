@@ -89,7 +89,7 @@ cp .env.example .env
 # Compile
 npx hardhat compile
 
-# Run tests (16 tests, mock FHE mode)
+# Run tests (21 tests, mock FHE mode)
 npx hardhat test
 
 # Deploy to Sepolia

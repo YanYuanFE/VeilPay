@@ -176,6 +176,106 @@ describe("ConfidentialPayroll", function () {
     });
   });
 
+  describe("Payroll Execution", function () {
+    it("should execute payroll for active employees", async function () {
+      const { token, payroll, employer, alice } = await loadFixture(deployFixture);
+      const payrollAddr = await payroll.getAddress();
+      const tokenAddr = await token.getAddress();
+
+      // Mint tokens to employer
+      await token.mint(employer.address, 100000n);
+
+      // Approve payroll contract as operator
+      const futureTime = Math.floor(Date.now() / 1000) + 86400;
+      await token.setOperator(payrollAddr, futureTime);
+
+      // Add employee with salary 5000
+      const input = hre.fhevm.createEncryptedInput(payrollAddr, employer.address);
+      input.add64(5000n);
+      const encrypted = await input.encrypt();
+      await payroll.addEmployee(alice.address, encrypted.handles[0], encrypted.inputProof);
+
+      // Execute payroll
+      await payroll.executePayroll();
+
+      // Verify lastPayTimestamp was updated
+      const info = await payroll.getEmployeeInfo(alice.address);
+      expect(info.lastPayTimestamp).to.be.greaterThan(0);
+    });
+
+    it("should not allow non-employer to execute payroll", async function () {
+      const { payroll, alice } = await loadFixture(deployFixture);
+      await expect(
+        payroll.connect(alice).executePayroll()
+      ).to.be.revertedWith("Not employer");
+    });
+
+    it("should execute batch payroll within bounds", async function () {
+      const { token, payroll, employer, alice, bob } = await loadFixture(deployFixture);
+      const payrollAddr = await payroll.getAddress();
+
+      await token.mint(employer.address, 100000n);
+      const futureTime = Math.floor(Date.now() / 1000) + 86400;
+      await token.setOperator(payrollAddr, futureTime);
+
+      // Add two employees
+      const input1 = hre.fhevm.createEncryptedInput(payrollAddr, employer.address);
+      input1.add64(3000n);
+      const enc1 = await input1.encrypt();
+      await payroll.addEmployee(alice.address, enc1.handles[0], enc1.inputProof);
+
+      const input2 = hre.fhevm.createEncryptedInput(payrollAddr, employer.address);
+      input2.add64(4000n);
+      const enc2 = await input2.encrypt();
+      await payroll.addEmployee(bob.address, enc2.handles[0], enc2.inputProof);
+
+      // Execute batch for only first employee
+      await payroll.executePayrollBatch(0, 1);
+
+      const infoAlice = await payroll.getEmployeeInfo(alice.address);
+      const infoBob = await payroll.getEmployeeInfo(bob.address);
+      expect(infoAlice.lastPayTimestamp).to.be.greaterThan(0);
+      expect(infoBob.lastPayTimestamp).to.equal(0); // not yet paid
+    });
+
+    it("should reject batch with out-of-bounds index", async function () {
+      const { payroll } = await loadFixture(deployFixture);
+      await expect(
+        payroll.executePayrollBatch(0, 10)
+      ).to.be.revertedWith("Index out of bounds");
+    });
+
+    it("should skip removed employees during payroll", async function () {
+      const { token, payroll, employer, alice, bob } = await loadFixture(deployFixture);
+      const payrollAddr = await payroll.getAddress();
+
+      await token.mint(employer.address, 100000n);
+      const futureTime = Math.floor(Date.now() / 1000) + 86400;
+      await token.setOperator(payrollAddr, futureTime);
+
+      const input1 = hre.fhevm.createEncryptedInput(payrollAddr, employer.address);
+      input1.add64(3000n);
+      const enc1 = await input1.encrypt();
+      await payroll.addEmployee(alice.address, enc1.handles[0], enc1.inputProof);
+
+      const input2 = hre.fhevm.createEncryptedInput(payrollAddr, employer.address);
+      input2.add64(4000n);
+      const enc2 = await input2.encrypt();
+      await payroll.addEmployee(bob.address, enc2.handles[0], enc2.inputProof);
+
+      // Remove alice
+      await payroll.removeEmployee(alice.address);
+
+      // Execute payroll — should only pay bob
+      await payroll.executePayroll();
+
+      const infoAlice = await payroll.getEmployeeInfo(alice.address);
+      const infoBob = await payroll.getEmployeeInfo(bob.address);
+      expect(infoAlice.lastPayTimestamp).to.equal(0); // skipped
+      expect(infoBob.lastPayTimestamp).to.be.greaterThan(0);
+    });
+  });
+
   describe("View Functions", function () {
     it("should return employee info", async function () {
       const { payroll, employer, alice } = await loadFixture(deployFixture);

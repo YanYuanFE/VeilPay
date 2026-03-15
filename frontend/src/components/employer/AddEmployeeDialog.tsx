@@ -49,9 +49,6 @@ export function AddEmployeeDialog({ open, onOpenChange }: Props) {
       setStep('Sending transaction…')
       setIsEncrypting(false)
 
-      console.log('[AddEmployee] handle:', encrypted.handles[0])
-      console.log('[AddEmployee] proof length:', encrypted.inputProof.length)
-
       writeContract({
         address: PAYROLL_MANAGER_ADDRESS as `0x${string}`,
         abi: ConfidentialPayrollABI,
