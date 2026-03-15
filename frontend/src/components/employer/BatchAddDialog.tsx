@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useAccount } from 'wagmi'
+import { useAccount, useWalletClient, usePublicClient } from 'wagmi'
 import { useQueryClient } from '@tanstack/react-query'
+import { encodeFunctionData } from 'viem'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Loader2, Plus, Trash2 } from 'lucide-react'
@@ -19,7 +20,7 @@ interface EmployeeRow {
   salary: string
 }
 
-type Status = 'idle' | 'encrypting' | 'pending' | 'confirming' | 'done' | 'error'
+type Status = 'idle' | 'encrypting' | 'pending' | 'done' | 'error'
 
 interface RowStatus {
   status: Status
@@ -28,7 +29,10 @@ interface RowStatus {
 
 export function BatchAddDialog({ open, onOpenChange }: Props) {
   const { address } = useAccount()
+  const { data: walletClient } = useWalletClient()
+  const publicClient = usePublicClient()
   const queryClient = useQueryClient()
+
   const [rows, setRows] = useState<EmployeeRow[]>([
     { address: '', salary: '' },
     { address: '', salary: '' },
@@ -62,7 +66,7 @@ export function BatchAddDialog({ open, onOpenChange }: Props) {
   }
 
   const handleSubmit = async () => {
-    if (!address) return
+    if (!address || !walletClient || !publicClient) return
     const err = validate()
     if (err) {
       toast.error(err)
@@ -88,14 +92,21 @@ export function BatchAddDialog({ open, onOpenChange }: Props) {
         statuses[i] = { status: 'pending' }
         setRowStatuses([...statuses])
 
-        // Send transaction and wait for it
-        const hash = await sendTransaction(row.address as `0x${string}`, encrypted)
-        if (hash) {
-          statuses[i] = { status: 'done' }
-          successCount++
-        } else {
-          statuses[i] = { status: 'error', error: 'Transaction rejected' }
-        }
+        const data = encodeFunctionData({
+          abi: ConfidentialPayrollABI,
+          functionName: 'addEmployee',
+          args: [row.address as `0x${string}`, encrypted.handles[0] as `0x${string}`, encrypted.inputProof as `0x${string}`],
+        })
+
+        const hash = await walletClient.sendTransaction({
+          to: PAYROLL_MANAGER_ADDRESS as `0x${string}`,
+          data,
+          gas: BigInt(15_000_000),
+        })
+
+        await publicClient.waitForTransactionReceipt({ hash })
+        statuses[i] = { status: 'done' }
+        successCount++
       } catch (error) {
         statuses[i] = { status: 'error', error: error instanceof Error ? error.message : 'Failed' }
       }
@@ -114,62 +125,10 @@ export function BatchAddDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  // Helper: send addEmployee tx and wait for receipt
-  const sendTransaction = (
-    empAddress: `0x${string}`,
-    encrypted: { handles: string[]; inputProof: string },
-  ): Promise<string | null> => {
-    return new Promise((resolve) => {
-      // We use a temporary component-level approach with writeContract
-      // Since we need sequential execution, we use the walletClient directly
-      const walletAction = async () => {
-        try {
-          const provider = (window as any).ethereum
-          if (!provider) throw new Error('No wallet provider')
-
-          const { createWalletClient, custom, encodeFunctionData } = await import('viem')
-          const { sepolia } = await import('wagmi/chains')
-
-          const client = createWalletClient({
-            chain: sepolia,
-            transport: custom(provider),
-          })
-
-          const accounts = await client.getAddresses()
-          const data = encodeFunctionData({
-            abi: ConfidentialPayrollABI,
-            functionName: 'addEmployee',
-            args: [empAddress, encrypted.handles[0] as `0x${string}`, encrypted.inputProof as `0x${string}`],
-          })
-
-          const hash = await client.sendTransaction({
-            account: accounts[0],
-            to: PAYROLL_MANAGER_ADDRESS as `0x${string}`,
-            data,
-            gas: BigInt(15_000_000),
-          })
-
-          // Wait for confirmation
-          const { createPublicClient, http } = await import('viem')
-          const publicClient = createPublicClient({
-            chain: sepolia,
-            transport: http('https://ethereum-sepolia-rpc.publicnode.com'),
-          })
-          await publicClient.waitForTransactionReceipt({ hash })
-          resolve(hash)
-        } catch {
-          resolve(null)
-        }
-      }
-      walletAction()
-    })
-  }
-
   const statusLabel = (s: RowStatus): string => {
     switch (s.status) {
       case 'encrypting': return 'Encrypting…'
       case 'pending': return 'Sending…'
-      case 'confirming': return 'Confirming…'
       case 'done': return 'Added'
       case 'error': return s.error || 'Failed'
       default: return ''
@@ -246,7 +205,7 @@ export function BatchAddDialog({ open, onOpenChange }: Props) {
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={processing}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} disabled={processing || rows.every(r => !r.address || !r.salary)}>
+          <Button onClick={handleSubmit} disabled={processing || !walletClient || rows.every(r => !r.address || !r.salary)}>
             {processing && <Loader2 className="mr-1.5 size-4 animate-spin" />}
             {processing ? `Processing ${currentIndex + 1}/${rows.length}…` : `Add ${rows.length} employees`}
           </Button>
