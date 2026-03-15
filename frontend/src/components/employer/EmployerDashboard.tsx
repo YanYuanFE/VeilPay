@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAccount, useReadContract } from 'wagmi'
-import { Plus } from 'lucide-react'
+import { Plus, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfidentialPayrollABI, PayrollTokenABI, PAYROLL_MANAGER_ADDRESS, PAYROLL_TOKEN_ADDRESS } from '@/lib/contracts'
@@ -13,7 +13,7 @@ export function EmployerDashboard() {
   const { address } = useAccount()
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
 
-  const { data: employer } = useReadContract({
+  const { data: employer, isLoading: isLoadingEmployer } = useReadContract({
     address: PAYROLL_MANAGER_ADDRESS as `0x${string}`,
     abi: ConfidentialPayrollABI,
     functionName: 'employer',
@@ -38,6 +38,15 @@ export function EmployerDashboard() {
   })
 
   const isEmployer = employer && address && employer.toString().toLowerCase() === address.toLowerCase()
+
+  if (isLoadingEmployer) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 gap-3">
+        <Loader2 className="size-8 text-primary animate-spin" />
+        <p className="text-sm text-muted-foreground">Loading dashboard…</p>
+      </div>
+    )
+  }
 
   if (!isEmployer) {
     return (

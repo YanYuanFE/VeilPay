@@ -1,4 +1,5 @@
 import { useAccount, useReadContract } from 'wagmi'
+import { Loader2 } from 'lucide-react'
 import { ConfidentialPayrollABI, PAYROLL_MANAGER_ADDRESS } from '@/lib/contracts'
 import { SalaryCard } from './SalaryCard'
 import { PaymentHistory } from './PaymentHistory'
@@ -7,19 +8,28 @@ import { formatTimestamp, shortenAddress } from '@/lib/utils'
 export function EmployeeDashboard() {
   const { address } = useAccount()
 
-  const { data: isEmployee } = useReadContract({
+  const { data: isEmployee, isLoading: isCheckingEmployee } = useReadContract({
     address: PAYROLL_MANAGER_ADDRESS as `0x${string}`,
     abi: ConfidentialPayrollABI,
     functionName: 'isEmployee',
     args: address ? [address as `0x${string}`] : undefined,
   })
 
-  const { data: employeeInfo } = useReadContract({
+  const { data: employeeInfo, isLoading: isLoadingInfo } = useReadContract({
     address: PAYROLL_MANAGER_ADDRESS as `0x${string}`,
     abi: ConfidentialPayrollABI,
     functionName: 'getEmployeeInfo',
     args: address ? [address as `0x${string}`] : undefined,
   })
+
+  if (isCheckingEmployee || isLoadingInfo) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 gap-3">
+        <Loader2 className="size-8 text-primary animate-spin" />
+        <p className="text-sm text-muted-foreground">Loading employee data…</p>
+      </div>
+    )
+  }
 
   if (!isEmployee) {
     return (
