@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { ConfidentialPayrollABI, PayrollTokenABI, PAYROLL_MANAGER_ADDRESS, PAYROLL_TOKEN_ADDRESS } from '@/lib/contracts'
 import { handleToHex, decryptValue } from '@/lib/fhe'
 import { formatTokenAmount } from '@/lib/utils'
+import { toast } from 'sonner'
 
 export function SalaryCard() {
   const { address } = useAccount()
@@ -50,9 +51,11 @@ export function SalaryCard() {
       const clearValue = await decryptValue(hexHandle, PAYROLL_MANAGER_ADDRESS, walletClient)
       setDecryptedSalary(formatTokenAmount(BigInt(clearValue)))
       setShowSalary(true)
+      toast.success('Salary decrypted successfully.')
     } catch (error) {
-      console.error('Salary decryption failed:', error)
-      setDecryptError(error instanceof Error ? error.message : 'Decryption failed')
+      const msg = error instanceof Error ? error.message : 'Decryption failed'
+      setDecryptError(msg)
+      toast.error('Failed to decrypt salary.')
     } finally {
       setIsDecrypting(false)
     }
@@ -72,9 +75,11 @@ export function SalaryCard() {
       const clearValue = await decryptValue(hexHandle, PAYROLL_TOKEN_ADDRESS, walletClient)
       setDecryptedBalance(formatTokenAmount(BigInt(clearValue)))
       setShowBalance(true)
+      toast.success('Balance decrypted successfully.')
     } catch (error) {
-      console.error('Balance decryption failed:', error)
-      setDecryptError(error instanceof Error ? error.message : 'Decryption failed')
+      const msg = error instanceof Error ? error.message : 'Decryption failed'
+      setDecryptError(msg)
+      toast.error('Failed to decrypt balance.')
     } finally {
       setIsDecrypting(false)
     }

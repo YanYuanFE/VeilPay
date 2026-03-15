@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, Lock, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ConfidentialPayrollABI, PayrollTokenABI, PAYROLL_MANAGER_ADDRESS, PAYROLL_TOKEN_ADDRESS } from '@/lib/contracts'
+import { toast } from 'sonner'
 
 export function ExecutePayroll() {
   const { address } = useAccount()
@@ -28,12 +29,19 @@ export function ExecutePayroll() {
   const { writeContract: execPayroll, data: payrollHash, isPending: isExecuting } = useWriteContract()
   const { isLoading: isPayrollConfirming, isSuccess: isPayrollDone } = useWaitForTransactionReceipt({ hash: payrollHash })
 
-  // Refresh reads after approve or payroll
   useEffect(() => {
-    if (isApproved || isPayrollDone) {
+    if (isApproved) {
       queryClient.invalidateQueries()
+      toast.success('Operator approved successfully.')
     }
-  }, [isApproved, isPayrollDone, queryClient])
+  }, [isApproved, queryClient])
+
+  useEffect(() => {
+    if (isPayrollDone) {
+      queryClient.invalidateQueries()
+      toast.success('Payroll executed. All transfers were confidential.')
+    }
+  }, [isPayrollDone, queryClient])
 
   const handleApproveOperator = () => {
     const until = Math.floor(Date.now() / 1000) + 365 * 24 * 3600

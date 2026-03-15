@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Loader2 } from 'lucide-react'
 import { ConfidentialPayrollABI, PAYROLL_MANAGER_ADDRESS } from '@/lib/contracts'
 import { encryptAmount } from '@/lib/fhe'
+import { toast } from 'sonner'
 
 interface Props {
   open: boolean
@@ -26,12 +27,13 @@ export function AddEmployeeDialog({ open, onOpenChange }: Props) {
   const { writeContract, data: hash, isPending, error: txError } = useWriteContract()
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash })
 
-  // Refresh all contract reads after successful transaction
   useEffect(() => {
     if (isSuccess) {
       queryClient.invalidateQueries()
+      toast.success('Employee added successfully. Salary encrypted on-chain.')
+      onOpenChange(false)
     }
-  }, [isSuccess, queryClient])
+  }, [isSuccess, queryClient, onOpenChange])
 
   const handleSubmit = async () => {
     if (!address || !employeeAddress || !salary) return
