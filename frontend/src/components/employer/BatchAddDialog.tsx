@@ -145,7 +145,7 @@ export function BatchAddDialog({ open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={processing ? undefined : onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Batch add employees</DialogTitle>
           <DialogDescription>

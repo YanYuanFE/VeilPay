@@ -63,7 +63,7 @@ export function ExecutePayroll() {
   }
 
   return (
-    <div className="max-w-lg space-y-6">
+    <div className="space-y-6">
       <div>
         <h3 className="text-base font-semibold text-foreground">Execute payroll</h3>
         <p className="mt-1 text-sm text-muted-foreground text-pretty">
@@ -113,7 +113,7 @@ export function ExecutePayroll() {
           {(isExecuting || isPayrollConfirming) ? (
             <>
               <Loader2 className="mr-1.5 size-4 animate-spin" />
-              Processing\u2026
+              Processing
             </>
           ) : (
             <>Run payroll for {activeCount?.toString() || '0'} employees</>
