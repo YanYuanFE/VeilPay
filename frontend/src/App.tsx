@@ -16,7 +16,7 @@ function App() {
           <Route path="/employee" element={<EmployeePage />} />
         </Routes>
       </Layout>
-      <Toaster />
+      <Toaster richColors />
     </Web3Provider>
   )
 }

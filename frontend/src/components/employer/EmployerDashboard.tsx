@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useAccount, useReadContract } from 'wagmi'
-import { Plus, Loader2 } from 'lucide-react'
+import { Plus, Users, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfidentialPayrollABI, PayrollTokenABI, PAYROLL_MANAGER_ADDRESS, PAYROLL_TOKEN_ADDRESS } from '@/lib/contracts'
 import { AddEmployeeDialog } from './AddEmployeeDialog'
+import { BatchAddDialog } from './BatchAddDialog'
 import { EmployeeTable } from './EmployeeTable'
 import { ExecutePayroll } from './ExecutePayroll'
 import { shortenAddress } from '@/lib/utils'
@@ -12,6 +13,7 @@ import { shortenAddress } from '@/lib/utils'
 export function EmployerDashboard() {
   const { address } = useAccount()
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
+  const [isBatchDialogOpen, setIsBatchDialogOpen] = useState(false)
 
   const { data: employer, isLoading: isLoadingEmployer } = useReadContract({
     address: PAYROLL_MANAGER_ADDRESS as `0x${string}`,
@@ -68,10 +70,16 @@ export function EmployerDashboard() {
           <h1 className="text-2xl font-bold tracking-tight text-foreground text-balance">Employer dashboard</h1>
           <p className="mt-1 text-sm text-muted-foreground">Manage employees and execute encrypted payroll</p>
         </div>
-        <Button onClick={() => setIsAddDialogOpen(true)} size="sm" className="gap-1.5">
-          <Plus className="size-4" />
-          Add employee
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => setIsBatchDialogOpen(true)} size="sm" variant="outline" className="gap-1.5">
+            <Users className="size-4" />
+            Batch add
+          </Button>
+          <Button onClick={() => setIsAddDialogOpen(true)} size="sm" className="gap-1.5">
+            <Plus className="size-4" />
+            Add employee
+          </Button>
+        </div>
       </div>
 
       {/* Stats -- flat text, no card wrappers */}
@@ -103,6 +111,7 @@ export function EmployerDashboard() {
       </Tabs>
 
       <AddEmployeeDialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen} />
+      <BatchAddDialog open={isBatchDialogOpen} onOpenChange={setIsBatchDialogOpen} />
     </div>
   )
 }
