@@ -1,0 +1,24 @@
+# secrets
+.env
+.env.*
+!.env.example
+contracts/.env
+
+# dependencies and build output
+node_modules/
+web/dist/
+contracts/out/
+contracts/cache/
+contracts/broadcast/*/31337/
+
+# circuit build: only the hasher bytecode and verification key are needed by tests;
+# the proving artifacts live once in web/public/zk/v2
+build/*
+!build/poseidon2.hex
+!build/transaction_vkey.json
+
+# local-only documentation
+docs/
+
+.DS_Store
+.vercel

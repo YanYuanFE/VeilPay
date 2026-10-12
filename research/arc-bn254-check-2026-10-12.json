@@ -1,0 +1,61 @@
+{
+  "checked_at_utc": "2026-10-12T07:56:36.251520+00:00",
+  "method": "read-only eth_call; no transaction sent",
+  "reference": "https://eips.ethereum.org/EIPS/eip-197",
+  "results": [
+    {
+      "endpoint": "https://rpc.mainnet.arc.io",
+      "chain_id": 5042,
+      "block": 25549693,
+      "tests": [
+        {
+          "name": "pairing_single_generator",
+          "expected": 0,
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "passed": true
+        },
+        {
+          "name": "pairing_cancelled_pair",
+          "expected": 1,
+          "response": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "endpoint": "https://rpc.drpc.mainnet.arc.io",
+      "chain_id": 5042,
+      "block": 25549694,
+      "tests": [
+        {
+          "name": "pairing_single_generator",
+          "expected": 0,
+          "response": {
+            "id": 1,
+            "jsonrpc": "2.0",
+            "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "passed": true
+        },
+        {
+          "name": "pairing_cancelled_pair",
+          "expected": 1,
+          "response": {
+            "id": 1,
+            "jsonrpc": "2.0",
+            "result": "0x0000000000000000000000000000000000000000000000000000000000000001"
+          },
+          "passed": true
+        }
+      ]
+    }
+  ]
+}

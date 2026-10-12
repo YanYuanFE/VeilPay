@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VeilPay</title>
+    <script>
+    // set the theme before first paint so there is no flash; src/lib/theme.tsx keeps it in sync afterwards
+    (function () {
+      var pref = null
+      try { pref = localStorage.getItem('vp_theme') } catch (e) {}
+      var light = pref === 'light' || (pref !== 'dark' && window.matchMedia('(prefers-color-scheme: light)').matches)
+      document.documentElement.dataset.theme = light ? 'light' : 'dark'
+      if (!light) document.documentElement.classList.add('dark')
+    })()
+  </script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

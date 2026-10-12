@@ -1,0 +1,65 @@
+{
+  "checked_at_utc": "2026-10-12T08:33:20.493847+00:00",
+  "network": "testnet",
+  "method": "read-only eth_call of G0Probe creation code; no transaction sent; no wallet used",
+  "circuit": "commitment = Poseidon(ownerTag, amount, rho); amount < 2^64; public [commitment, amount]",
+  "public_signals": [
+    "9097199435466297748057972780541784751487773221005907240918416602202393478963",
+    "1000000000"
+  ],
+  "results": [
+    {
+      "endpoint": "https://rpc.testnet.arc.io",
+      "passed": true,
+      "chain_id": 5042002,
+      "block": 66790628,
+      "cases": [
+        {
+          "name": "valid_proof",
+          "expected": true,
+          "verified": true,
+          "verify_call_gas": 200812,
+          "passed": true
+        },
+        {
+          "name": "tampered_commitment",
+          "expected": false,
+          "verified": false,
+          "verify_call_gas": 200812,
+          "passed": true
+        },
+        {
+          "name": "tampered_amount",
+          "expected": false,
+          "verified": false,
+          "verify_call_gas": 200812,
+          "passed": true
+        },
+        {
+          "name": "commitment_plus_field_modulus",
+          "expected": false,
+          "verified": false,
+          "verify_call_gas": 5778,
+          "passed": true
+        },
+        {
+          "name": "negated_pi_a",
+          "expected": false,
+          "verified": false,
+          "verify_call_gas": 200802,
+          "passed": true
+        },
+        {
+          "name": "swapped_public_inputs",
+          "expected": false,
+          "verified": false,
+          "verify_call_gas": 200812,
+          "passed": true
+        }
+      ],
+      "probe_estimate_gas": 1613761
+    }
+  ],
+  "passed": true,
+  "scope": "Real Groth16 proof verified by snarkjs-exported verifier executing on Arc nodes. Prototype single-party setup; not a payroll circuit or vault."
+}
