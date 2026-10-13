@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { ArrowUpRight, Info, TriangleAlert } from 'lucide-react'
 import { cn } from 'cn'
-import { EURC, EXPLORER, PERMIT2, USDC, VAULT, VAULT_DEPLOY_BLOCK, arcTestnet } from '@/lib/veilpay/config'
+import { EURC, EXPLORER, PERMIT2, USDC, VAULT, VAULT_DEPLOY_BLOCK, arc } from '@/lib/veilpay/config'
 
 const VERIFIER = '0x231a8Ab940cdf3d941b23f41f39F11dD579be31E'
 const POSEIDON = '0x05357D9598ff47DEA70B04d4C585AF5BC592F344'
@@ -220,15 +220,15 @@ export function DocsPage() {
               ['Everyone else', 'Reads the public chain', 'That deposits, payroll transactions and withdrawals happened; deposit and withdrawal amounts'],
             ]}
           />
-          <Callout tone="warn" title="Testnet prototype">
-            VeilPay runs on Arc Testnet ({arcTestnet.id}). The Groth16 parameters come from a single-party setup and neither the
-            circuit nor the contracts have been audited. Do not use it for real salaries.
+          <Callout tone="warn" title="Early, unaudited">
+            VeilPay runs on {arc.name} (chain id {arc.id}). The Groth16 parameters come from a single-party setup and neither the
+            circuit nor the contracts have been audited. Use small amounts only.
           </Callout>
         </Section>
 
         <Section id="quickstart" title="Quickstart" eyebrow="Guides">
           <P>
-            You need a browser wallet on Arc Testnet with a little testnet USDC for gas (Arc pays gas in USDC). A standard
+            You need a browser wallet on {arc.name} with a little USDC for gas (Arc pays gas in USDC). A standard
             EOA wallet such as MetaMask works; see <a className="underline underline-offset-4" href="#keys">Keys</a> for why some
             smart-contract and MPC wallets are refused.
           </P>
@@ -236,7 +236,7 @@ export function DocsPage() {
           <Sub id="employers" title="Employers">
             <Steps items={[
               <>Open <Link className="underline underline-offset-4" to="/app">the app</Link>, connect your wallet and sign the sign-in message.</>,
-              <>Create an organization and choose its payroll token (USDC or EURC); it can't be changed later. VeilPay asks you to unlock your private keys (the first time, you sign the same message twice); the organization's treasury is owned by these keys.</>,
+              <>Create an organization and choose its payroll token: USDC, EURC, or any other ERC-20 on Arc by address (the first organization to use a new token registers it on the vault with one transaction). It can't be changed later. VeilPay asks you to unlock your private keys (the first time, you sign the same message twice); the organization's treasury is owned by these keys.</>,
               <>In <b>Treasury</b>, deposit the organization's token. Each deposit is a single EIP-3009 signature with no approval transaction (tokens without EIP-3009 use Permit2 after a one-time approval). USDC deposits are submitted by the VeilPay relayer, which takes a small fee from the deposit; EURC deposits are sent from your wallet. The deposit amount is public; it becomes one private note.</>,
               <>In <b>Members</b>, paste one person per line as <C>name, email</C> (email optional). Each person gets a private invite link; copy them individually or all at once as CSV.</>,
               <>When people have accepted, open <b>Payroll</b>, enter amounts (or bulk-fill with <C>email or name, amount</C>), set the memo and pay. Up to 15 people are paid per transaction, so N people take ⌈N/15⌉ wallet confirmations.</>,
@@ -371,7 +371,7 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
 
           <Sub id="index" title="Event index">
             <P>
-              Arc's RPC rejects log queries spanning more than 10,000 blocks, which is roughly 85 minutes of Arc Testnet. The
+              Arc's RPC rejects log queries spanning more than 10,000 blocks, which is roughly 85 minutes of Arc blocks. The
               VeilPay server therefore indexes the vault's public <C>NewCommitment</C> and <C>NewNullifier</C> events. Every
               client downloads all of them and decrypts locally; asking for &ldquo;my notes&rdquo; or checking spends one by
               one would tell the server or RPC which notes are yours.
@@ -410,7 +410,7 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
             it. Nothing is written on-chain.
           </P>
           <Steps items={[
-            'Checks that the link is for this vault on Arc Testnet.',
+            `Checks that the link is for this vault on ${arc.name}.`,
             <>Re-hashes the opening with the vault's domain tag and compares it with the stated commitment.</>,
             <>Queries Arc directly (not the VeilPay API) for the vault's <C>NewCommitment</C> log at that block and note index.</>,
           ]} />
@@ -429,8 +429,8 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
           <Table
             head={['Item', 'Value']}
             rows={[
-              ['Network', `Arc Testnet, chain id ${arcTestnet.id}`],
-              ['RPC', <span key="r" className="num">{arcTestnet.rpcUrls.default.http[0]}</span>],
+              ['Network', `${arc.name}, chain id ${arc.id}`],
+              ['RPC', <span key="r" className="num">{arc.rpcUrls.default.http[0]}</span>],
               ['Explorer', <Ext key="e" href={EXPLORER}>{EXPLORER.replace('https://', '')}</Ext>],
               ['VeilPayVault', addr(VAULT)],
               ['TransactionVerifier (Groth16)', addr(VERIFIER)],
@@ -442,7 +442,7 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
             ]}
           />
           <Bullets items={[
-            'The vault has no upgrade path, no selfdestruct and no delegatecall. Funds leave only through a verified proof. Its deployer can add tokens to the allowlist but never remove one, so existing notes always stay withdrawable.',
+            'The vault has no upgrade path, no selfdestruct and no delegatecall. Funds leave only through a verified proof. It has no owner: anyone can register an ERC-20 with 6 to 30 decimals, and a registered token can never be removed, so existing notes always stay withdrawable. Notes count in 6-decimal units; an 18-decimal token moves amount × 10¹² of its own units. Deposits must arrive in full, so fee-on-transfer tokens are rejected; rebasing tokens are not supported.',
             'State changes happen before transfers; any failed token transfer reverts the whole transaction, including the nullifier.',
             'Deposits check the vault\'s balance actually increased by the deposit amount. Tokens sent to the vault directly are not credited to anyone.',
             'Measured on Arc Testnet: 1,616,243 gas for a payroll transaction, 1,743,610 for a relayed EIP-3009 deposit and 1,666,922 for a relayed withdrawal. Most of it is the 31 on-chain Poseidon hashes (about 29k gas each); the rest is Groth16 verification over 24 public inputs, storage and 17 events. A full transaction pays 15 people, so about 108k gas per person.',

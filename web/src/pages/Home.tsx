@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { isAddress, type Address } from 'viem'
 import { Link, useNavigate } from 'react-router'
 import { Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,25 +12,59 @@ import { SignInButton } from '@/components/Unlock'
 import { api } from '@/lib/api'
 import { reportError } from '@/lib/format'
 import { useSession } from '@/lib/session'
-import { ASSETS, USDC, assetOf } from '@/lib/veilpay/config'
+import { readToken, registerAsset } from '@/lib/veilpay/chain'
+import { ASSETS, USDC, arc, assetOf } from '@/lib/veilpay/config'
+
+const OTHER = 'other'
+type Custom = { status: 'idle' | 'loading' } | { status: 'error'; error: string } | { status: 'ok'; symbol: string; decimals: number; registered: boolean }
+
+/** Reads a pasted token address: symbol, decimals and whether the vault already knows it. */
+function useCustomToken(address: string): Custom {
+  const [state, setState] = useState<Custom>({ status: 'idle' })
+  useEffect(() => {
+    if (!isAddress(address)) return setState(address ? { status: 'error', error: 'Not an address' } : { status: 'idle' })
+    let live = true
+    setState({ status: 'loading' })
+    readToken(address).then(
+      (t) => live && setState(t.decimals < 6 || t.decimals > 30
+        ? { status: 'error', error: `${t.symbol} has ${t.decimals} decimals; the vault supports 6 to 30` }
+        : { status: 'ok', symbol: t.symbol, decimals: t.decimals, registered: t.registered }),
+      (err) => {
+        console.error('token lookup failed', address, err)
+        if (live) setState({ status: 'error', error: 'Not an ERC-20 token on Arc' })
+      },
+    )
+    return () => { live = false }
+  }, [address])
+  return state
+}
 
 function CreateOrg() {
-  const { unlock, refresh } = useSession()
+  const { unlock, refresh, client, account } = useSession()
   const navigate = useNavigate()
   const [name, setName] = useState('')
-  const [asset, setAsset] = useState(USDC)
-  const [busy, setBusy] = useState(false)
+  const [choice, setChoice] = useState(USDC.address as string)
+  const [customAddress, setCustomAddress] = useState('')
+  const custom = useCustomToken(choice === OTHER ? customAddress.trim() : '')
+  const [busy, setBusy] = useState<string | null>(null)
+  const tokenReady = choice !== OTHER || custom.status === 'ok'
   const submit = async () => {
-    setBusy(true)
+    setBusy('Creating…')
     try {
       const w = await unlock() // the org treasury is owned by this wallet's VeilPay key
-      const org = await api<{ id: string }>('/orgs', { method: 'POST', body: { name, asset: asset.address, ...w.address } })
+      const asset = (choice === OTHER ? customAddress.trim() : choice) as Address
+      if (choice === OTHER && custom.status === 'ok' && !custom.registered) {
+        setBusy(`Registering ${custom.symbol}…`)
+        await registerAsset(client!, account!, asset)
+        setBusy('Creating…')
+      }
+      const org = await api<{ id: string }>('/orgs', { method: 'POST', body: { name, asset, ...w.address } })
       await refresh()
       navigate(`/orgs/${org.id}`)
     } catch (err) {
       reportError(err)
     } finally {
-      setBusy(false)
+      setBusy(null)
     }
   }
   return (
@@ -46,14 +81,26 @@ function CreateOrg() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="org-asset">Payroll token</Label>
-          <select id="org-asset" value={asset.symbol} onChange={(e) => setAsset(ASSETS.find((a) => a.symbol === e.target.value)!)}
+          <select id="org-asset" value={choice} onChange={(e) => setChoice(e.target.value)}
             className="h-10 w-full rounded-lg border border-input bg-transparent px-3 text-sm dark:bg-input/30">
-            {ASSETS.map((a) => <option key={a.symbol} value={a.symbol}>{a.symbol}</option>)}
+            {ASSETS.map((a) => <option key={a.address} value={a.address}>{a.symbol}</option>)}
+            <option value={OTHER}>Other token…</option>
           </select>
+          {choice === OTHER && (
+            <>
+              <Input aria-label="Token address" value={customAddress} className="font-mono" placeholder="0x…" onChange={(e) => setCustomAddress(e.target.value)} />
+              <p className={`text-xs ${custom.status === 'error' ? 'text-destructive' : 'text-muted-foreground'}`}>
+                {custom.status === 'loading' && 'Reading token…'}
+                {custom.status === 'error' && custom.error}
+                {custom.status === 'ok' && `${custom.symbol} · ${custom.decimals} decimals${custom.registered ? '' : ' · first use: you will sign one transaction to register it on the vault'}`}
+                {custom.status === 'idle' && 'Any ERC-20 on Arc with 6 or more decimals. Fee-on-transfer and rebasing tokens are not supported.'}
+              </p>
+            </>
+          )}
           <p className="text-xs text-muted-foreground">The treasury and every payment use this token. It can't be changed later.</p>
         </div>
         <DialogFooter>
-          <Button disabled={busy || !name.trim()} onClick={submit}>{busy ? 'Creating…' : 'Create'}</Button>
+          <Button disabled={!!busy || !name.trim() || !tokenReady} onClick={submit}>{busy ?? 'Create'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -68,7 +115,7 @@ export function Home() {
         <LogoMark className="mx-auto size-14" />
         <h1 className="mt-8 text-5xl leading-none">Enter the vault</h1>
         <p className="mx-auto mt-5 max-w-md leading-relaxed text-muted-foreground">
-          Connect a wallet on Arc Testnet and sign in. Your private payroll keys are derived in this browser and never leave it.
+          Connect a wallet on {arc.name} and sign in. Your private payroll keys are derived in this browser and never leave it.
         </p>
         <div className="mt-8 flex justify-center"><SignInButton size="lg" /></div>
       </div>
@@ -79,7 +126,7 @@ export function Home() {
       <PageTitle eyebrow="Workspace" action={<CreateOrg />}>Organizations</PageTitle>
       {me.orgs.length === 0 ? (
         <div className="rounded-lg border border-dashed border-hairline px-8 py-16 text-center">
-          <p className="font-display text-2xl italic">No envelopes yet.</p>
+          <p className="text-lg font-medium">No envelopes yet.</p>
           <p className="mt-2 text-sm text-muted-foreground">Create an organization to hold a private treasury and invite your team.</p>
         </div>
       ) : (

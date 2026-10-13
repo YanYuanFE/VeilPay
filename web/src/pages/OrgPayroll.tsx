@@ -17,7 +17,7 @@ import { fmtAmount, parseAmount, reportError, short } from '@/lib/format'
 import { openJson, sealJson, stageText, type Member, type OrgData, type Run, type RunRecord, type SalaryBook } from '@/lib/records'
 import { useSession } from '@/lib/session'
 import { PER_TX, chunkLines, runPayroll, unspentBalance, type PayLine, type Stage } from '@/lib/veilpay/actions'
-import { EXPLORER, VAULT, assetOf, type Asset } from '@/lib/veilpay/config'
+import { EXPLORER, VAULT, arc, assetOf, type Asset } from '@/lib/veilpay/config'
 import type { Wallet } from '@/lib/veilpay/crypto'
 
 type OpenRun = Run & { record: RunRecord | null }
@@ -196,7 +196,7 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
           ['Run', r.id], ['Date', new Date(r.created_at).toLocaleString()], ['Status', r.status], ['Recipients', String(rec.lines.length)],
           ...rec.lines.map((l): [string, string] => [l.name, `${fmt(BigInt(l.amount))} · ${l.memo}`]),
           ...rec.txs.filter(Boolean).map((h, i): [string, string] => [`Transaction ${i + 1}`, h]),
-          ['Vault', `${VAULT} (Arc Testnet)`],
+          ['Vault', `${VAULT} (${arc.name})`],
         ],
         footnote: 'Amounts are sealed on-chain; only each recipient and this employer can read them. This receipt was generated locally from the employer’s encrypted record.',
       })

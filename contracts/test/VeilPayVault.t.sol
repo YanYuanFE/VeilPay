@@ -6,6 +6,10 @@ import {TransactionVerifier} from "../src/TransactionVerifier.sol";
 import {ProverBase, Vm} from "../script/ProverBase.sol";
 
 contract MockToken {
+    string public constant symbol = "MOCK";
+    uint8 public immutable decimals;
+    uint256 public transferFee; // skimmed from every transfer, as a fee-on-transfer token does
+    bool public silent; // transfer/transferFrom return no data, as USDT does
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     mapping(address => bool) public blocked;
@@ -17,7 +21,8 @@ contract MockToken {
     bytes32 public immutable DOMAIN_SEPARATOR;
     mapping(address => mapping(bytes32 => bool)) public authorizationState;
 
-    constructor() {
+    constructor(uint8 decimals_) {
+        decimals = decimals_;
         DOMAIN_SEPARATOR = keccak256(abi.encode(
             keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
             keccak256("Mock"), keccak256("2"), block.chainid, address(this)
@@ -39,6 +44,8 @@ contract MockToken {
 
     function mint(address to, uint256 amount) external { balanceOf[to] += amount; }
     function setBlocked(address who, bool b) external { blocked[who] = b; }
+    function setTransferFee(uint256 f) external { transferFee = f; }
+    function setSilent(bool b) external { silent = b; }
 
     function approve(address spender, uint256 amount) external returns (bool) {
         allowance[msg.sender][spender] = amount;
@@ -46,18 +53,45 @@ contract MockToken {
     }
 
     function transfer(address to, uint256 amount) external returns (bool) {
-        return _move(msg.sender, to, amount);
+        _move(msg.sender, to, amount);
+        return _ret();
     }
 
     function transferFrom(address from, address to, uint256 amount) external returns (bool) {
         allowance[from][msg.sender] -= amount;
-        return _move(from, to, amount);
+        _move(from, to, amount);
+        return _ret();
     }
 
-    function _move(address from, address to, uint256 amount) internal returns (bool) {
+    function _ret() internal view returns (bool) {
+        if (silent) assembly { return(0, 0) }
+        return true;
+    }
+
+    function _move(address from, address to, uint256 amount) internal {
         require(!blocked[from] && !blocked[to], "blocked");
         balanceOf[from] -= amount;
-        balanceOf[to] += amount;
+        balanceOf[to] += amount - transferFee;
+    }
+}
+
+/// Token whose transferFrom calls back into the vault.
+contract Reenter {
+    uint8 public constant decimals = 6;
+    VeilPayVault vault;
+    VeilPayVault.TxArgs args;
+    VeilPayVault.ExtData ext;
+
+    function arm(VeilPayVault v, VeilPayVault.TxArgs memory a, VeilPayVault.ExtData memory e) external {
+        vault = v;
+        args = a;
+        ext = e;
+    }
+
+    function balanceOf(address) external pure returns (uint256) { return 0; }
+
+    function transferFrom(address, address, uint256) external returns (bool) {
+        vault.transact(args, ext);
         return true;
     }
 }
@@ -88,8 +122,8 @@ contract VeilPayVaultTest is ProverBase {
         vm.chainId(5042002);
         vm.etch(PERMIT2, vm.parseBytes(vm.readFile("test/fixtures/permit2.hex")));
         employerWallet = vm.addr(EMPLOYER_KEY);
-        usdc = new MockToken();
-        eurc = new MockToken();
+        usdc = new MockToken(6);
+        eurc = new MockToken(6);
         bytes memory code = vm.parseBytes(vm.readFile("../build/poseidon2.hex"));
         address h;
         assembly { h := create(0, add(code, 0x20), mload(code)) }
@@ -295,14 +329,14 @@ contract VeilPayVaultTest is ProverBase {
         require(r.exitCode != 0, "mismatched public asset must not be provable");
     }
 
-    function test_unlistedAssetRejected() public {
-        MockToken other = new MockToken();
+    function test_unregisteredAssetRejected() public {
+        MockToken other = new MockToken(6);
         other.mint(employerWallet, 1_000 * UNIT);
         vm.prank(employerWallet);
         other.approve(address(vault), type(uint256).max);
         Tx memory t = _depositTx(other, 500 * UNIT);
         vm.prank(employerWallet);
-        vm.expectRevert(bytes("asset not allowed"));
+        vm.expectRevert(bytes("asset not registered"));
         vault.transact(t.args, t.ext);
     }
 
@@ -316,23 +350,78 @@ contract VeilPayVaultTest is ProverBase {
         _submitRaw(t);
     }
 
-    function test_addAssetIsOwnerOnlyAndAddOnly() public {
-        MockToken other = new MockToken();
+    function test_anyoneRegistersAssetOnce() public {
+        MockToken other = new MockToken(6);
         vm.prank(bobWallet);
-        vm.expectRevert(bytes("not owner"));
-        vault.addAsset(address(other));
+        vault.registerAsset(address(other));
+        require(vault.assetScale(address(other)) == 1, "6 decimals: scale 1");
         vm.expectRevert(bytes("asset exists"));
-        vault.addAsset(address(usdc));
-        vm.expectRevert(bytes("zero asset"));
-        vault.addAsset(address(0));
+        vault.registerAsset(address(other));
+        vm.expectRevert(bytes("asset exists"));
+        vault.registerAsset(address(usdc));
+    }
 
-        vault.addAsset(address(other)); // this test contract deployed the vault
-        require(vault.assetAllowed(address(other)), "added");
-        other.mint(employerWallet, 1_000 * UNIT);
+    function test_registerRejectsUnsupportedTokens() public {
+        vm.expectRevert(bytes("not a contract"));
+        vault.registerAsset(address(0xdead));
+        vm.expectRevert(bytes("no decimals"));
+        vault.registerAsset(address(hasher));
+        MockToken five = new MockToken(5);
+        vm.expectRevert(bytes("unsupported decimals"));
+        vault.registerAsset(address(five));
+        MockToken big = new MockToken(31);
+        vm.expectRevert(bytes("unsupported decimals"));
+        vault.registerAsset(address(big));
+        MockToken max = new MockToken(30);
+        vault.registerAsset(address(max));
+        require(vault.assetScale(address(max)) == 1e24, "30 decimals: scale 1e24");
+    }
+
+    /// 18-decimal token: notes hold 6-decimal vault units, transfers move amount * 1e12 token units.
+    function test_eighteenDecimalTokenIsScaled() public {
+        MockToken t18 = _registered(18);
+        _depositAndPay(t18);
+        require(t18.balanceOf(address(vault)) == 10_000 * 1e18, "deposit scaled");
+        require(t18.balanceOf(employerWallet) == 90_000 * 1e18, "employer debited in token units");
+
+        _submit(_bobWithdraw(t18), relayer);
+        require(t18.balanceOf(bobWallet) == 1_500 * 1e18, "withdraw scaled");
+        require(t18.balanceOf(relayer) == 10 * 1e18, "fee scaled");
+        require(t18.balanceOf(address(vault)) == 8_490 * 1e18, "vault after withdraw");
+    }
+
+    function test_tokenWithoutReturnValueWorks() public {
+        MockToken quiet = _registered(6);
+        quiet.setSilent(true);
+        _depositAndPay(quiet);
+        _submit(_bobWithdraw(quiet), relayer);
+        require(quiet.balanceOf(bobWallet) == 1_500 * UNIT, "silent token withdraw");
+    }
+
+    function test_feeOnTransferDepositRejected() public {
+        MockToken taxed = _registered(6);
+        taxed.setTransferFee(1);
+        Tx memory t = _depositTx(taxed, 500 * UNIT);
         vm.prank(employerWallet);
-        other.approve(address(vault), type(uint256).max);
-        _deposit(other, 500 * UNIT);
-        require(other.balanceOf(address(vault)) == 500 * UNIT, "new asset deposits work");
+        vm.expectRevert(bytes("deposit mismatch"));
+        vault.transact(t.args, t.ext);
+    }
+
+    function test_reentrantTransactRejected() public {
+        Reenter evil = new Reenter();
+        vault.registerAsset(address(evil));
+        Tx memory t = _depositTx(MockToken(address(evil)), 500 * UNIT);
+        evil.arm(vault, t.args, t.ext);
+        vm.expectRevert(bytes("reentrant call"));
+        vault.transact(t.args, t.ext);
+    }
+
+    function _registered(uint8 decimals) internal returns (MockToken token) {
+        token = new MockToken(decimals);
+        vault.registerAsset(address(token));
+        token.mint(employerWallet, 100_000 * 10 ** uint256(decimals));
+        vm.prank(employerWallet);
+        token.approve(address(vault), type(uint256).max);
     }
 
     // ---------- Permit2 deposits ----------

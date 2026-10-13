@@ -6,7 +6,7 @@
 // it has been withdrawn since (that needs the owner's spend secret).
 import { parseAbiItem } from 'viem'
 import { publicClient, getDomainTag } from './chain'
-import { arcTestnet, VAULT } from './config'
+import { arc, VAULT } from './config'
 import { FIELD, noteCommitment, type Note, type Wallet } from './crypto'
 
 export type Disclosure = {
@@ -25,7 +25,7 @@ export type Disclosure = {
 
 export function disclosureFor(w: Wallet, n: Note): Disclosure {
   return {
-    v: 2, chainId: arcTestnet.id, vault: VAULT, index: n.index, block: n.blockNumber.toString(),
+    v: 2, chainId: arc.id, vault: VAULT, index: n.index, block: n.blockNumber.toString(),
     commitment: n.commitment.toString(), ownerTag: w.ownerTag.toString(), asset: n.asset, amount: n.amount.toString(), rho: n.rho.toString(), memo: n.memo,
   }
 }
@@ -73,7 +73,7 @@ const newCommitment = parseAbiItem('event NewCommitment(uint256 indexed commitme
 
 /** Verifies against Arc directly (not the VeilPay API), so the verifier does not have to trust our server. */
 export async function verifyDisclosure(d: Disclosure): Promise<Verification> {
-  const sameVault = d.chainId === arcTestnet.id && d.vault.toLowerCase() === VAULT.toLowerCase()
+  const sameVault = d.chainId === arc.id && d.vault.toLowerCase() === VAULT.toLowerCase()
   if (!sameVault) return { sameVault, openingMatches: false, onChain: false, timestamp: null }
   const matches = openingMatches(d, await getDomainTag())
   const block = BigInt(d.block)

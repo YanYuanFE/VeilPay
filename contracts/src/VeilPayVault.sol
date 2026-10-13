@@ -65,8 +65,9 @@ interface IERC3009 {
 
 /// Private multi-asset ledger: notes are Poseidon commitments in a Merkle tree, spent with Groth16 proofs.
 /// Every note carries an asset; one transaction moves one asset, which is public only when value enters or leaves.
-/// The owner can only add assets to the allowlist, never remove them; there is no upgrade path,
-/// no selfdestruct/delegatecall. Amounts are the asset's ERC-20 units.
+/// Any ERC-20 with 6+ decimals can be registered by anyone; there is no owner, upgrade path, selfdestruct or delegatecall.
+/// Amounts are 6-decimal vault units: an asset with d decimals moves amount * 10^(d-6) of its ERC-20 units.
+/// Fee-on-transfer tokens are rejected by the balance checks; rebasing tokens are unsupported.
 contract VeilPayVault {
     uint256 public constant FIELD_SIZE =
         21888242871839275222246405745257275088548364400416034343698204186575808495617;
@@ -85,7 +86,6 @@ contract VeilPayVault {
     IPoseidon2 public immutable hasher;
     ITransactionVerifier public immutable verifier;
     IPermit2 public immutable permit2;
-    address public immutable owner;
     uint256 public immutable domainTag;
 
     uint256[LEVELS] public zeros;
@@ -94,7 +94,9 @@ contract VeilPayVault {
     uint256 public currentRootIndex;
     uint256 public nextIndex;
     mapping(uint256 => bool) public spentNullifiers;
-    mapping(address => bool) public assetAllowed;
+    /// ERC-20 units per vault unit, 10^(decimals - 6); zero when the asset is not registered.
+    mapping(address => uint256) public assetScale;
+    uint256 private locked = 1;
 
     struct Proof {
         uint256[2] a;
@@ -140,15 +142,21 @@ contract VeilPayVault {
 
     event NewCommitment(uint256 indexed commitment, uint256 index, bytes encryptedOutput);
     event NewNullifier(uint256 indexed nullifier);
-    event AssetAdded(address indexed asset);
+    event AssetRegistered(address indexed asset, uint256 scale);
+
+    modifier nonReentrant() {
+        require(locked == 1, "reentrant call");
+        locked = 2;
+        _;
+        locked = 1;
+    }
 
     constructor(address[] memory assets, IPoseidon2 hasher_, ITransactionVerifier verifier_, IPermit2 permit2_) {
         hasher = hasher_;
         verifier = verifier_;
         permit2 = permit2_;
-        owner = msg.sender;
         domainTag = uint256(keccak256(abi.encode("veilpay.v3", block.chainid, address(this)))) % FIELD_SIZE;
-        for (uint256 i; i < assets.length; i++) _addAsset(assets[i]);
+        for (uint256 i; i < assets.length; i++) _registerAsset(assets[i]);
 
         uint256 z = ZERO_LEAF;
         for (uint256 i; i < LEVELS; i++) {
@@ -159,55 +167,56 @@ contract VeilPayVault {
         roots[0] = z;
     }
 
-    /// Add-only: removing an asset would strand notes that hold it.
-    function addAsset(address asset) external {
-        require(msg.sender == owner, "not owner");
-        _addAsset(asset);
+    /// Permissionless and permanent: removing an asset would strand notes that hold it.
+    function registerAsset(address asset) external {
+        _registerAsset(asset);
     }
 
     /// Deposits pull from msg.sender via a plain ERC-20 allowance.
-    function transact(TxArgs calldata t, ExtData calldata ext) external {
+    function transact(TxArgs calldata t, ExtData calldata ext) external nonReentrant {
         _verifyAndRecord(t, ext);
         if (t.depositAmount > 0) {
-            IERC20 token = IERC20(t.asset);
-            uint256 before = token.balanceOf(address(this));
-            require(token.transferFrom(msg.sender, address(this), t.depositAmount), "deposit failed");
-            require(token.balanceOf(address(this)) == before + t.depositAmount, "deposit mismatch");
+            uint256 value = _units(t.asset, t.depositAmount);
+            uint256 before = IERC20(t.asset).balanceOf(address(this));
+            _call(t.asset, abi.encodeCall(IERC20.transferFrom, (msg.sender, address(this), value)), "deposit failed");
+            require(IERC20(t.asset).balanceOf(address(this)) == before + value, "deposit mismatch");
         }
         _payOut(t, ext);
     }
 
     /// Deposit funded by a Permit2 signature; the witness binds the signature to these outputs and ext data,
     /// so a relayer or front-runner cannot redirect the funds.
-    function transactWithPermit2(TxArgs calldata t, ExtData calldata ext, Permit2Deposit calldata p) external {
+    function transactWithPermit2(TxArgs calldata t, ExtData calldata ext, Permit2Deposit calldata p) external nonReentrant {
         require(t.depositAmount > 0, "no deposit");
         uint256 extHash = _verifyAndRecord(t, ext);
+        uint256 value = _units(t.asset, t.depositAmount);
         IERC20 token = IERC20(t.asset);
         uint256 before = token.balanceOf(address(this));
         permit2.permitWitnessTransferFrom(
-            IPermit2.PermitTransferFrom(IPermit2.TokenPermissions(t.asset, t.depositAmount), p.nonce, p.deadline),
-            IPermit2.SignatureTransferDetails(address(this), t.depositAmount),
+            IPermit2.PermitTransferFrom(IPermit2.TokenPermissions(t.asset, value), p.nonce, p.deadline),
+            IPermit2.SignatureTransferDetails(address(this), value),
             p.owner,
             depositWitness(t.outCommitments, extHash),
             DEPOSIT_WITNESS_TYPE,
             p.signature
         );
-        require(token.balanceOf(address(this)) == before + t.depositAmount, "deposit mismatch");
+        require(token.balanceOf(address(this)) == before + value, "deposit mismatch");
         _payOut(t, ext);
     }
 
     /// Deposit funded by an EIP-3009 authorization, needing no prior approval. Its nonce is depositWitness(...),
     /// so the signature only funds these outputs and ext data, and only once.
-    function transactWithAuthorization(TxArgs calldata t, ExtData calldata ext, Authorization calldata a) external {
+    function transactWithAuthorization(TxArgs calldata t, ExtData calldata ext, Authorization calldata a) external nonReentrant {
         require(t.depositAmount > 0, "no deposit");
         uint256 extHash = _verifyAndRecord(t, ext);
+        uint256 value = _units(t.asset, t.depositAmount);
         IERC20 token = IERC20(t.asset);
         uint256 before = token.balanceOf(address(this));
         IERC3009(t.asset).receiveWithAuthorization(
-            a.from, address(this), t.depositAmount, a.validAfter, a.validBefore,
+            a.from, address(this), value, a.validAfter, a.validBefore,
             depositWitness(t.outCommitments, extHash), a.v, a.r, a.s
         );
-        require(token.balanceOf(address(this)) == before + t.depositAmount, "deposit mismatch");
+        require(token.balanceOf(address(this)) == before + value, "deposit mismatch");
         _payOut(t, ext);
     }
 
@@ -231,11 +240,28 @@ contract VeilPayVault {
         return roots[currentRootIndex];
     }
 
-    function _addAsset(address asset) internal {
-        require(asset != address(0), "zero asset");
-        require(!assetAllowed[asset], "asset exists");
-        assetAllowed[asset] = true;
-        emit AssetAdded(asset);
+    function _registerAsset(address asset) internal {
+        require(asset.code.length > 0, "not a contract");
+        require(assetScale[asset] == 0, "asset exists");
+        (bool ok, bytes memory ret) = asset.staticcall{gas: 50_000}(abi.encodeWithSignature("decimals()"));
+        require(ok && ret.length == 32, "no decimals");
+        uint256 decimals = abi.decode(ret, (uint256));
+        require(decimals >= 6 && decimals <= 30, "unsupported decimals");
+        uint256 scale = 10 ** (decimals - 6);
+        assetScale[asset] = scale;
+        emit AssetRegistered(asset, scale);
+    }
+
+    /// ERC-20 units for `amount` vault units of `asset`.
+    function _units(address asset, uint64 amount) internal view returns (uint256) {
+        return uint256(amount) * assetScale[asset];
+    }
+
+    /// ERC-20 call that accepts tokens returning nothing (e.g. USDT) as well as `true`; bubbles the token's revert.
+    function _call(address token, bytes memory data, string memory err) internal {
+        (bool ok, bytes memory ret) = token.call(data);
+        if (!ok) assembly { revert(add(ret, 32), mload(ret)) }
+        require(ret.length == 0 || abi.decode(ret, (bool)), err);
     }
 
     /// Checks the proof and public inputs, then spends the nullifier and inserts the outputs. Returns extDataHash.
@@ -244,7 +270,7 @@ contract VeilPayVault {
         require(!spentNullifiers[t.nullifier], "nullifier spent");
         require(t.withdrawAmount == 0 || ext.recipient != address(0), "no recipient");
         require(t.fee == 0 || ext.feeRecipient != address(0), "no fee recipient");
-        if (t.depositAmount > 0 || t.withdrawAmount > 0 || t.fee > 0) require(assetAllowed[t.asset], "asset not allowed");
+        if (t.depositAmount > 0 || t.withdrawAmount > 0 || t.fee > 0) require(assetScale[t.asset] != 0, "asset not registered");
         else require(t.asset == address(0), "asset must be hidden");
 
         extHash = hashExtData(ext);
@@ -270,8 +296,10 @@ contract VeilPayVault {
     }
 
     function _payOut(TxArgs calldata t, ExtData calldata ext) internal {
-        if (t.withdrawAmount > 0) require(IERC20(t.asset).transfer(ext.recipient, t.withdrawAmount), "withdraw failed");
-        if (t.fee > 0) require(IERC20(t.asset).transfer(ext.feeRecipient, t.fee), "fee failed");
+        if (t.withdrawAmount > 0) {
+            _call(t.asset, abi.encodeCall(IERC20.transfer, (ext.recipient, _units(t.asset, t.withdrawAmount))), "withdraw failed");
+        }
+        if (t.fee > 0) _call(t.asset, abi.encodeCall(IERC20.transfer, (ext.feeRecipient, _units(t.asset, t.fee))), "fee failed");
     }
 
     /// Inserts N_OUTS leaves as one aligned subtree; returns the index of the first leaf.

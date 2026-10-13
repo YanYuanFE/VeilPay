@@ -8,10 +8,10 @@ Status: G0 verification is done. The transaction circuit and vault contract are 
 
 - `web/`: Vite + React + shadcn/ui frontend, with a Vercel Function + Postgres backend. Proofs are generated in the browser; the backend only stores organizations, member lists, payout addresses, and payroll records sealed with the employer's viewing key. See [web/README.md](web/README.md).
 - `circuits/transaction.circom`: unified transaction circuit. 1 input note and 16 output notes (up to 15 payees per transaction plus 1 change note), with public deposit, withdrawal, and fee amounts; deposits use a zero-value dummy input note. Every note commits to its token; one transaction moves one token, which is public only when value enters or leaves, so payroll transactions hide it. About 26.9k constraints, 24 public inputs.
-- `contracts/src/VeilPayVault.sol`: non-upgradeable multi-asset vault. Depth-20 Poseidon commitment tree (each transaction inserts a 16-leaf subtree), 32 historical roots, a nullifier set, an `extDataHash` binding the recipient, fee recipient, and ciphertexts, an add-only token allowlist, `transactWithAuthorization` for EIP-3009 deposits, and `transactWithPermit2` for Permit2 deposits. Both bind the signature to `depositWitness(outCommitments, extDataHash)` (the EIP-3009 nonce or the Permit2 witness), so a submitter cannot redirect the funds.
+- `contracts/src/VeilPayVault.sol`: non-upgradeable multi-asset vault. Depth-20 Poseidon commitment tree (each transaction inserts a 16-leaf subtree), 32 historical roots, a nullifier set, an `extDataHash` binding the recipient, fee recipient, and ciphertexts, permissionless token registration (any ERC-20 with 6 to 30 decimals; notes count in 6-decimal units and transfers scale by 10^(decimals-6); fee-on-transfer deposits are rejected, tokens returning no bool are accepted), `transactWithAuthorization` for EIP-3009 deposits, and `transactWithPermit2` for Permit2 deposits. Both bind the signature to `depositWitness(outCommitments, extDataHash)` (the EIP-3009 nonce or the Permit2 witness), so a submitter cannot redirect the funds.
 - `contracts/src/TransactionVerifier.sol`: Groth16 verifier exported by `scripts/build_circuit.sh`.
 - `prover/prove.mjs`: generates transaction proofs locally and rebuilds Merkle paths.
-- `contracts/test/VeilPayVault.t.sol`: 25 tests that call the real prover via ffi. Covers deposits, private payroll, relayed withdrawals, double spends, tampered recipient/fee/ciphertext/amount, cross-vault replay, unknown roots, atomic rollback for blocklisted addresses, unauthorized deposits, inflation, and spending someone else's note; plus separate per-token ledgers, withdrawing a note as another token, unlisted tokens, hidden payroll tokens, the add-only allowlist, Permit2 deposits (relayed, front-run with a stolen signature, no deposit), and EIP-3009 deposits (no approval, stolen signature, single-use authorization, no deposit) against a mock with FiatToken's checks. Permit2 runs from its Arc testnet bytecode (`test/fixtures/permit2.hex`).
+- `contracts/test/VeilPayVault.t.sol`: 30 tests that call the real prover via ffi. Covers deposits, private payroll, relayed withdrawals, double spends, tampered recipient/fee/ciphertext/amount, cross-vault replay, unknown roots, atomic rollback for blocklisted addresses, unauthorized deposits, inflation, and spending someone else's note; plus separate per-token ledgers, withdrawing a note as another token, unregistered tokens, hidden payroll tokens, permissionless registration and its rejections, 18-decimal scaling, tokens without a return value, fee-on-transfer tokens, reentrancy, Permit2 deposits (relayed, front-run with a stolen signature, no deposit), and EIP-3009 deposits (no approval, stolen signature, single-use authorization, no deposit) against a mock with FiatToken's checks. Permit2 runs from its Arc testnet bytecode (`test/fixtures/permit2.hex`).
 - `contracts/script/Deploy.s.sol`: deploys the Poseidon hasher, verifier, and vault.
 - `prover/wallet.mjs`: wallet. Derives the spending secret and X25519 viewing key from a 32-byte seed; encrypts notes with libsodium sealed boxes (fixed 173-byte ciphertext that includes the token); scans on-chain events, decrypts, and checks commitments. `prover/wallet.test.mjs` has 9 tests (`node --test prover/*.test.mjs`).
 - `prover/testnet_flow.mjs`: drives the full testnet flow with cast; rebuilds the commitment tree from `NewCommitment` events, with USDC transfers executed for real on an Arc node.
@@ -35,7 +35,29 @@ PRIVATE_KEY=0x... node prover/testnet_flow.mjs <vault> <deployBlock> research/<r
 
 `forge script` simulates on a local EVM first and cannot execute the precompile Arc USDC relies on, so the USDC flow sends transactions directly with cast.
 
-### Current testnet deployment (v4, EIP-3009 deposits, 2026-10-13)
+### Arc mainnet deployment (v5, 2026-10-13)
+
+The web app targets this deployment (`NET` in `web/src/lib/veilpay/config.ts` switches between mainnet and testnet).
+
+| Contract | Address |
+| --- | --- |
+| VeilPayVault | `0x99b143A677f49B13053Ec99C5fB16116bf0A49Ff` (block 25769407) |
+| TransactionVerifier | `0xeaA45532F03CE35c0F816F8AC01aAF86dE669257` |
+| Poseidon(2) | `0xD87d10cc49c3d04DaC256b533F95547017204e16` |
+
+Chain id 5042, RPC `https://rpc.mainnet.arc.io`, explorer `https://explorer.arc.io`. Registered at deployment: USDC `0x3600000000000000000000000000000000000000`, EURC `0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1` (both scale 1, EIP-712 domain version `2`). Same bytecode as the v5 testnet deployment below. Organizations are stored per chain id, so testnet organizations do not appear on mainnet.
+
+### Testnet deployment (v5, any ERC-20, 2026-10-13)
+
+| Contract | Address |
+| --- | --- |
+| VeilPayVault | `0x72948A150498B5B1438CA7d01d07d2F51C58ef14` (block 67004668) |
+| TransactionVerifier | `0x487D9E6bB2601c264BE423631559f52a3ebF6c41` |
+| Poseidon(2) | `0x101619805DA9120d8D5E9bDc3F760B9e8dAc1A84` |
+
+Same circuit, proving key and note format as v3/v4. v5 drops the owner and the allowlist: `registerAsset(token)` is permissionless and stores `assetScale = 10^(decimals-6)`, so notes keep 6-decimal units while transfers move `amount * scale` token units. USDC and EURC are registered at deployment. Browser end-to-end check with an 18-decimal test token (`MOCK`, `0x4b368d8DAa172e61854A8539266065bF7a16c84c`): the create-organization dialog registered it on first use (scale 1e12), a Permit2 deposit of 1,000 MOCK left exactly 1e21 base units in the vault (1,741,986 gas), private payroll paid 300.5 MOCK, the employee withdrew 100 MOCK from their own wallet (exactly 1e20 base units received, 1,664,628 gas) with 200.5 MOCK change, and the change note's disclosure link verified. A relayed EIP-3009 USDC deposit also passed (1,709,389 gas).
+
+### 2026-10-13 testnet deployment (v4, EIP-3009 deposits, retired)
 
 | Contract | Address |
 | --- | --- |

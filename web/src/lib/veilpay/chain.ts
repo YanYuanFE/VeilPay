@@ -1,12 +1,12 @@
 // Public client, cached public events, and vault transactions. Wallet connection is handled by wagmi/RainbowKit.
 import { createPublicClient, erc20Abi, http, maxUint256, parseSignature, UserRejectedRequestError, type Address, type ContractFunctionArgs, type Hash, type WalletClient } from 'viem'
 import { api } from '../api'
-import { arcTestnet, N_OUTS, PERMIT2, VAULT, type Asset } from './config'
+import { arc, isAssetLoaded, N_OUTS, PERMIT2, rememberAsset, VAULT, type Asset } from './config'
 import { vaultAbi } from './vaultAbi'
 import type { ChainEvent, OutNote } from './crypto'
 import type { TransactArgs } from './prover'
 
-export const publicClient = createPublicClient({ chain: arcTestnet, transport: http() })
+export const publicClient = createPublicClient({ chain: arc, transport: http() })
 
 export const isUserRejection = (err: unknown) =>
   err instanceof UserRejectedRequestError || (err as { code?: number })?.code === 4001
@@ -45,8 +45,9 @@ async function doSync() {
 let domainTag: Promise<bigint> | undefined
 export const getDomainTag = () => (domainTag ??= publicClient.readContract({ address: VAULT, abi: vaultAbi, functionName: 'domainTag' }))
 
-export const tokenBalance = (asset: Asset, who: Address) =>
-  publicClient.readContract({ address: asset.address, abi: erc20Abi, functionName: 'balanceOf', args: [who] })
+/** Public wallet balance in vault units (dust below one unit is dropped). */
+export const tokenBalance = async (asset: Asset, who: Address) =>
+  (await publicClient.readContract({ address: asset.address, abi: erc20Abi, functionName: 'balanceOf', args: [who] })) / asset.scale
 
 // ---------- transactions ----------
 
@@ -94,11 +95,37 @@ async function settle(hash: Hash) {
   return hash
 }
 
+/** Token metadata and vault registration; `registered` is false when the vault has not seen this token yet. */
+export async function readToken(address: Address) {
+  const [symbol, decimals, scale] = await Promise.all([
+    publicClient.readContract({ address, abi: erc20Abi, functionName: 'symbol' }),
+    publicClient.readContract({ address, abi: erc20Abi, functionName: 'decimals' }),
+    publicClient.readContract({ address: VAULT, abi: vaultAbi, functionName: 'assetScale', args: [address] }),
+  ])
+  return { symbol, decimals, registered: scale > 0n, asset: { symbol, address, decimals: 6, scale } satisfies Asset }
+}
+
+/** Loads registered vault assets so assetOf() can resolve them. */
+export async function loadAssets(addresses: string[]) {
+  const missing = [...new Set(addresses.map((a) => a.toLowerCase()))].filter((a) => !isAssetLoaded(a))
+  await Promise.all(missing.map(async (a) => {
+    const t = await readToken(a as Address)
+    if (!t.registered) throw new Error(`asset ${a} is not registered on the vault`)
+    rememberAsset(t.asset)
+  }))
+}
+
+/** Registers `token` on the vault from the connected wallet (permissionless, once per token). */
+export async function registerAsset(client: WalletClient, account: Address, token: Address) {
+  const { request } = await publicClient.simulateContract({ address: VAULT, abi: vaultAbi, functionName: 'registerAsset', account, args: [token] })
+  await confirm(await client.writeContract({ ...request, account }))
+}
+
 /** One-time unlimited approval of Permit2 for `asset`; each deposit is then authorized by a signature. */
 export async function ensurePermit2Allowance(client: WalletClient, owner: Address, asset: Asset, amount: bigint) {
   const allowance = await publicClient.readContract({ address: asset.address, abi: erc20Abi, functionName: 'allowance', args: [owner, PERMIT2] })
   if (allowance >= amount) return
-  const hash = await client.writeContract({ address: asset.address, abi: erc20Abi, functionName: 'approve', args: [PERMIT2, maxUint256], chain: arcTestnet, account: owner })
+  const hash = await client.writeContract({ address: asset.address, abi: erc20Abi, functionName: 'approve', args: [PERMIT2, maxUint256], chain: arc, account: owner })
   await confirm(hash)
 }
 
@@ -115,17 +142,17 @@ const PERMIT_TYPES = {
 } as const
 
 /** Permit2 signature letting the vault pull exactly this deposit, bound to these outputs and ext data. */
-export async function signDepositPermit(client: WalletClient, owner: Address, args: TxArgs, ext: ExtData): Promise<Permit2Deposit> {
+export async function signDepositPermit(client: WalletClient, owner: Address, asset: Asset, args: TxArgs, ext: ExtData): Promise<Permit2Deposit> {
   const nonceBytes = crypto.getRandomValues(new Uint8Array(31)) // Permit2 nonces are unordered; random avoids collisions
   const nonce = BigInt(`0x${Array.from(nonceBytes, (b) => b.toString(16).padStart(2, '0')).join('')}`)
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 30 * 60)
   const signature = await client.signTypedData({
     account: owner,
-    domain: { name: 'Permit2', chainId: arcTestnet.id, verifyingContract: PERMIT2 },
+    domain: { name: 'Permit2', chainId: arc.id, verifyingContract: PERMIT2 },
     types: PERMIT_TYPES,
     primaryType: 'PermitWitnessTransferFrom',
     message: {
-      permitted: { token: args.asset, amount: args.depositAmount },
+      permitted: { token: args.asset, amount: args.depositAmount * asset.scale },
       spender: VAULT, nonce, deadline,
       witness: { outCommitments: args.outCommitments, extDataHash: await hashExtData(ext) },
     },
@@ -142,7 +169,7 @@ export async function signDepositAuthorization(client: WalletClient, owner: Addr
   const validBefore = BigInt(Math.floor(Date.now() / 1000) + 30 * 60)
   const signature = await client.signTypedData({
     account: owner,
-    domain: { ...asset.eip3009, chainId: arcTestnet.id, verifyingContract: asset.address },
+    domain: { ...asset.eip3009, chainId: arc.id, verifyingContract: asset.address },
     types: {
       ReceiveWithAuthorization: [
         { name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' },
@@ -150,7 +177,7 @@ export async function signDepositAuthorization(client: WalletClient, owner: Addr
       ],
     },
     primaryType: 'ReceiveWithAuthorization',
-    message: { from: owner, to: VAULT, value: args.depositAmount, validAfter: 0n, validBefore, nonce },
+    message: { from: owner, to: VAULT, value: args.depositAmount * asset.scale, validAfter: 0n, validBefore, nonce },
   })
   const { r, s, yParity } = parseSignature(signature)
   return { from: owner, validAfter: 0n, validBefore, v: yParity + 27, r, s }

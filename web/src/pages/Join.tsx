@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { api } from '@/lib/api'
 import { reportError } from '@/lib/format'
 import { useSession } from '@/lib/session'
+import { loadAssets } from '@/lib/veilpay/chain'
 import { assetOf } from '@/lib/veilpay/config'
 import type { Wallet } from '@/lib/veilpay/crypto'
 
@@ -60,7 +61,9 @@ export function JoinPage() {
   const [invite, setInvite] = useState<Invite | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
-    api<Invite>(`/invites/${code}`).then(setInvite, (err: Error) => setError(err.message))
+    api<Invite>(`/invites/${code}`)
+      .then(async (inv) => { await loadAssets([inv.asset]); setInvite(inv) })
+      .catch((err: Error) => setError(err.message))
   }, [code])
   if (error) return <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>
   if (!invite) return <p className="text-muted-foreground">Loading invite…</p>

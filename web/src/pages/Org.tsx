@@ -19,7 +19,7 @@ import { fmtAmount, parseAmount, reportError, short } from '@/lib/format'
 import { parseRoster } from '@/lib/roster'
 import { useSession } from '@/lib/session'
 import { deposit, unspentBalance } from '@/lib/veilpay/actions'
-import { tokenBalance } from '@/lib/veilpay/chain'
+import { loadAssets, tokenBalance } from '@/lib/veilpay/chain'
 import { USDC, assetOf, type Asset } from '@/lib/veilpay/config'
 import type { Wallet } from '@/lib/veilpay/crypto'
 import { stageText, type Member, type OrgData } from '@/lib/records'
@@ -245,7 +245,11 @@ function Members({ data, reload }: { data: OrgData; reload: () => Promise<void> 
 function OrgContent({ w }: { w: Wallet }) {
   const { id } = useParams()
   const [data, setData] = useState<OrgData | null>(null)
-  const reload = useCallback(async () => setData(await api<OrgData>(`/orgs/${id}`)), [id])
+  const reload = useCallback(async () => {
+    const d = await api<OrgData>(`/orgs/${id}`)
+    await loadAssets([d.org.asset])
+    setData(d)
+  }, [id])
   useEffect(() => { reload().catch(reportError) }, [reload])
   if (!data) return <p className="text-muted-foreground">Loading organization…</p>
   if (data.org.owner_tag !== w.ownerTag.toString()) {

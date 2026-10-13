@@ -75,7 +75,7 @@ async function proveTransact(
  */
 export async function deposit(signer: Signer, w: Wallet, asset: Asset, amount: bigint, memo = 'deposit') {
   if (amount <= 0n) throw new Error('amount must be positive')
-  if (!asset.eip3009) await ensurePermit2Allowance(signer.client, signer.account, asset, amount)
+  if (!asset.eip3009) await ensurePermit2Allowance(signer.client, signer.account, asset, amount * asset.scale)
   const quote = asset === USDC ? await relayQuote() : null
   const fee = quote?.fee ?? 0n
   if (amount <= fee) throw new Error('amount must exceed the relayer fee')
@@ -84,7 +84,7 @@ export async function deposit(signer: Signer, w: Wallet, asset: Asset, amount: b
   signer.onStage?.('signing')
   const auth: DepositAuth = asset.eip3009
     ? { authorization: await signDepositAuthorization(signer.client, signer.account, asset, args, ext) }
-    : { permit: await signDepositPermit(signer.client, signer.account, args, ext) }
+    : { permit: await signDepositPermit(signer.client, signer.account, asset, args, ext) }
   if (!quote) return sendTransact(signer.client, signer.account, args, ext, auth)
   signer.onStage?.('relaying')
   return relayTransact(args, ext, auth)

@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { fmtAmount, short } from '@/lib/format'
+import { loadAssets } from '@/lib/veilpay/chain'
 import { assetOf } from '@/lib/veilpay/config'
-import { EXPLORER, VAULT } from '@/lib/veilpay/config'
+import { EXPLORER, VAULT, arc } from '@/lib/veilpay/config'
 import { parseDisclosure, verifyDisclosure, type Disclosure, type Verification } from '@/lib/veilpay/disclosure'
 
 type State =
@@ -44,7 +45,7 @@ function Result({ d, v }: { d: Disclosure; v: Verification }) {
         </div>
 
         <ul className="space-y-3 text-sm">
-          <Check ok={v.sameVault}>Link is for the VeilPay vault on Arc Testnet ({short(VAULT, 8, 6)})</Check>
+          <Check ok={v.sameVault}>Link is for the VeilPay vault on {arc.name} ({short(VAULT, 8, 6)})</Check>
           <Check ok={v.openingMatches}>The token, amount and memo hash to the stated commitment</Check>
           <Check ok={v.onChain}>That commitment was recorded by the vault in block <span className="num">{Number(d.block).toLocaleString('en-US')}</span> as note #{d.index}</Check>
         </ul>
@@ -82,6 +83,7 @@ export function VerifyPage() {
     }
     setState({ status: 'checking' })
     try {
+      await loadAssets([d.asset])
       setState({ status: 'done', d, v: await verifyDisclosure(d) })
     } catch (err) {
       setState({ status: 'invalid', error: `could not reach Arc to verify: ${(err as Error).message}` })

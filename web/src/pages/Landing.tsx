@@ -7,7 +7,7 @@ import { VeilCanvas } from '@/components/VeilCanvas'
 import { api } from '@/lib/api'
 import { useTheme } from '@/lib/theme'
 import { short } from '@/lib/format'
-import { EXPLORER, VAULT } from '@/lib/veilpay/config'
+import { EXPLORER, VAULT, arc } from '@/lib/veilpay/config'
 
 type Stats = { notes: number; spent: number; lastBlock: string | null }
 
@@ -222,7 +222,7 @@ function Limits() {
             'Deposits and withdrawals are ordinary public transfers: their amounts and addresses are visible.',
             'A small team paid at the same time can be guessed from timing and totals. Privacy grows with the pool.',
             'Your keys come from a wallet signature. A phishing site that gets the same message signed gets the keys.',
-            'Testnet prototype: single-party trusted setup, contracts and circuit not yet audited.',
+            'Early release: single-party trusted setup, contracts and circuit not yet audited. Use small amounts.',
           ].map((t) => (
             <li key={t} className="flex gap-4 py-5 text-bone/85">
               <span className="mt-2 size-1.5 shrink-0 rounded-full bg-seal" />
@@ -237,11 +237,11 @@ function Limits() {
 
 const PHASES: { tag: string; title: string; status: 'live' | 'next' | 'later'; items: string[] }[] = [
   {
-    tag: 'Now', title: 'Private payroll on Arc Testnet', status: 'live',
+    tag: 'Now', title: 'Private payroll on Arc mainnet', status: 'live',
     items: [
       'ZK vault with Groth16 proofs verified on-chain',
       'Notes sealed to each employee; balances decrypted in the browser',
-      'USDC or EURC per organization; payroll transactions don’t reveal which token moved',
+      'USDC, EURC or any ERC-20 per organization; payroll transactions don’t reveal which token moved',
       'No gas for users: a relayer submits USDC transactions, and a deposit is one EIP-3009 signature with no approval',
       'Organizations, CSV roster import, 15 people per payroll transaction with safe resume',
       'Private verification links for landlords, banks and auditors',
@@ -340,16 +340,24 @@ function Footer() {
           Launch VeilPay <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
         </Link>
         <div className="rule mt-24" />
-        <div className="mt-8 flex flex-col gap-6 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
-          <Logo />
-          <a className="num inline-flex items-center gap-1 hover:text-bone" href={`${EXPLORER}/address/${VAULT}`} target="_blank" rel="noreferrer">
-            VeilPayVault {short(VAULT, 8, 6)} on Arc Testnet <ArrowUpRight className="size-3.5" />
-          </a>
-          <span className="flex gap-5">
-            <Link to="/docs" className="hover:text-bone">Docs</Link>
-            <Link to="/verify" className="hover:text-bone">Verify a payment</Link>
-            <span>Testnet prototype · not audited</span>
-          </span>
+        <div className="grid gap-12 pt-16 pb-14 md:grid-cols-[1.6fr_1fr_1fr]">
+          <div className="flex max-w-[34ch] flex-col items-start gap-5">
+            <Logo />
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Private payroll on Arc.
+              <br />
+              Salaries sealed in a ZK vault, readable only by each employee.
+            </p>
+            <a className="inline-flex items-center gap-2 text-sm text-bone transition-colors hover:text-seal" href={REPO} target="_blank" rel="noreferrer">
+              <GithubMark className="size-4" /> GitHub
+            </a>
+          </div>
+          <FooterCol title="Product" links={[['#ledger', 'The ledger'], ['#how', 'How it works'], ['#limits', 'What stays public'], ['#roadmap', 'Roadmap']]} />
+          <FooterCol title="Resources" links={[['/docs', 'Documentation'], ['/verify', 'Verify a payment'], [`${EXPLORER}/address/${VAULT}`, `Vault ${short(VAULT, 6, 4)}`], ['https://docs.arc.io', 'Arc docs']]} />
+        </div>
+        <div className="eyebrow flex flex-wrap items-center justify-between gap-4 border-t border-hairline pt-6">
+          <span>© 2026 VeilPay</span>
+          <span>Built on {arc.name} · not audited</span>
         </div>
       </div>
     </footer>
@@ -363,7 +371,7 @@ export function Landing() {
     api<Stats>('/stats').then(setStats, (err) => console.error('stats unavailable', err))
   }, [])
   return (
-    <div className="min-h-svh bg-background text-foreground">
+    <div className="landing min-h-svh bg-background text-foreground">
       <Header />
       <Hero stats={stats} />
       <ChainVsYou />
@@ -373,5 +381,34 @@ export function Landing() {
       <Roadmap />
       <Footer />
     </div>
+  )
+}
+
+const REPO = 'https://github.com/YanYuanFE/VeilPay'
+
+function FooterCol({ title, links }: { title: string; links: [href: string, label: string][] }) {
+  return (
+    <nav className="flex flex-col items-start gap-4">
+      <span className="eyebrow">{title}</span>
+      {links.map(([href, label]) => {
+        const cls = 'text-[0.95rem] text-bone/85 transition-colors hover:text-seal'
+        if (href.startsWith('/')) return <Link key={href} to={href} className={cls}>{label}</Link>
+        const external = href.startsWith('http')
+        return (
+          <a key={href} href={href} className={cls} {...(external ? { target: '_blank', rel: 'noreferrer' } : {})}>
+            {label}{external && <ArrowUpRight className="ml-0.5 inline size-3.5" />}
+          </a>
+        )
+      })}
+    </nav>
+  )
+}
+
+/** GitHub mark, inlined because lucide dropped brand icons. */
+function GithubMark({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" />
+    </svg>
   )
 }

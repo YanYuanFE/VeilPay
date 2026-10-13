@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { reportError } from '@/lib/format'
 import { useSession } from '@/lib/session'
+import { arc } from '@/lib/veilpay/config'
 import type { Wallet } from '@/lib/veilpay/crypto'
 
 /** Renders children only once VeilPay keys are derived from the wallet signature. */
@@ -43,7 +44,7 @@ export function RequireLogin({ children }: { children: ReactNode }) {
     <Card>
       <CardHeader>
         <CardTitle>Connect your wallet</CardTitle>
-        <CardDescription>Sign in with your wallet on Arc Testnet to continue.</CardDescription>
+        <CardDescription>Sign in with your wallet on {arc.name} to continue.</CardDescription>
       </CardHeader>
       <CardContent>
         <SignInButton />

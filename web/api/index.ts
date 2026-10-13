@@ -7,7 +7,7 @@ import postgres from 'postgres'
 import { BaseError, createPublicClient, createWalletClient, getAddress, http, isAddress, parseAbiItem, type Address, type ContractFunctionArgs } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { parseSiweMessage } from 'viem/siwe'
-import { ASSETS, LOG_SPAN, N_OUTS, USDC, VAULT, VAULT_DEPLOY_BLOCK, arcTestnet } from '../src/lib/veilpay/config.js'
+import { LOG_SPAN, N_OUTS, USDC, VAULT, VAULT_DEPLOY_BLOCK, arc } from '../src/lib/veilpay/config.js'
 import { RELAY_GAS, relayFee } from '../src/lib/veilpay/relay.js'
 import { vaultAbi } from '../src/lib/veilpay/vaultAbi.js'
 
@@ -24,7 +24,7 @@ function env(name: string): string {
 
 // onnotice: 'create table if not exists' emits harmless NOTICEs on every cold start
 const sql = postgres(env('DATABASE_URL'), { max: 5, idle_timeout: 20, onnotice: () => undefined })
-const chain = createPublicClient({ chain: arcTestnet, transport: http() })
+const chain = createPublicClient({ chain: arc, transport: http() })
 const sessionKey = new TextEncoder().encode(env('SESSION_SECRET'))
 
 // ponytail: idempotent schema bootstrap on cold start; move to migrations once the schema starts changing.
@@ -49,6 +49,8 @@ const SCHEMA = `
   alter table orgs add column if not exists salary_book text;
   -- payroll token, fixed at creation; orgs created before multi-asset support paid in USDC
   alter table orgs add column if not exists asset text not null default '0x3600000000000000000000000000000000000000';
+  -- network the org's treasury lives on; orgs created before mainnet were on Arc testnet
+  alter table orgs add column if not exists chain_id int not null default 5042002;
   create table if not exists members (
     id uuid primary key default gen_random_uuid(),
     org_id uuid not null references orgs(id) on delete cascade,
@@ -178,7 +180,7 @@ async function verify(req: Request) {
   if (!parsed.nonce || !parsed.address) throw new HttpError(400, 'malformed SIWE message')
   const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host')
   if (parsed.domain !== host) throw new HttpError(400, 'SIWE domain mismatch')
-  if (parsed.chainId !== arcTestnet.id) throw new HttpError(400, 'SIWE chain mismatch')
+  if (parsed.chainId !== arc.id) throw new HttpError(400, 'SIWE chain mismatch')
 
   const [used] = await sql`delete from nonces where nonce = ${parsed.nonce} and expires_at > now() returning nonce`
   if (!used) throw new HttpError(400, 'nonce expired or already used')
@@ -194,11 +196,11 @@ async function verify(req: Request) {
 async function me(req: Request) {
   const address = await sessionAddress(req)
   if (!address) return json({ address: null })
-  const orgs = await sql`select id, name, asset, created_at from orgs where owner_address = ${address} order by created_at desc`
+  const orgs = await sql`select id, name, asset, created_at from orgs where owner_address = ${address} and chain_id = ${arc.id} order by created_at desc`
   const memberships = await sql`
     select m.id, m.name, m.org_id, o.name as org_name, m.owner_tag, m.joined_at
     from members m join orgs o on o.id = m.org_id
-    where m.wallet_address = ${address} order by m.joined_at desc`
+    where m.wallet_address = ${address} and o.chain_id = ${arc.id} order by m.joined_at desc`
   return json({ address, orgs, memberships })
 }
 
@@ -206,7 +208,7 @@ async function me(req: Request) {
 
 async function ownedOrg(orgId: string, address: Address) {
   if (!/^[0-9a-f-]{36}$/.test(orgId)) throw new HttpError(404, 'org not found')
-  const [org] = await sql`select * from orgs where id = ${orgId}`
+  const [org] = await sql`select * from orgs where id = ${orgId} and chain_id = ${arc.id}`
   if (!org || org.owner_address !== address) throw new HttpError(404, 'org not found')
   return org
 }
@@ -216,10 +218,12 @@ async function createOrg(req: Request) {
   const b = await body<{ name?: unknown; ownerTag?: unknown; viewPub?: unknown; asset?: unknown }>(req)
   const name = text(b.name, 'name', 100)
   const pa = paymentAddress(b)
-  const asset = ASSETS.find((a) => typeof b.asset === 'string' && a.address.toLowerCase() === b.asset.toLowerCase())
-  if (!asset) throw new HttpError(400, 'asset must be one of the vault allowlist')
+  if (typeof b.asset !== 'string' || !isAddress(b.asset)) throw new HttpError(400, 'asset must be a token address')
+  const asset = getAddress(b.asset)
+  const scale = await chain.readContract({ address: VAULT, abi: vaultAbi, functionName: 'assetScale', args: [asset] })
+  if (scale === 0n) throw new HttpError(400, 'asset is not registered on the vault')
   const [org] = await sql`
-    insert into orgs (name, owner_address, owner_tag, view_pub, asset) values (${name}, ${address}, ${pa.ownerTag}, ${pa.viewPub}, ${asset.address})
+    insert into orgs (name, owner_address, owner_tag, view_pub, asset, chain_id) values (${name}, ${address}, ${pa.ownerTag}, ${pa.viewPub}, ${asset}, ${arc.id})
     returning id, name, asset, created_at`
   return json(org, 201)
 }
@@ -262,7 +266,7 @@ async function removeMember(req: Request, orgId: string, memberId: string) {
 async function getInvite(code: string) {
   const [m] = await sql`
     select m.name, m.joined_at, m.wallet_address, o.name as org_name, o.asset as org_asset
-    from members m join orgs o on o.id = m.org_id where m.invite_code = ${code}`
+    from members m join orgs o on o.id = m.org_id where m.invite_code = ${code} and o.chain_id = ${arc.id}`
   if (!m) throw new HttpError(404, 'invite not found')
   return json({ orgName: m.org_name, asset: m.org_asset, memberName: m.name, joined: m.joined_at !== null, wallet: m.wallet_address })
 }
@@ -270,7 +274,7 @@ async function getInvite(code: string) {
 async function acceptInvite(req: Request, code: string) {
   const address = await requireSession(req)
   const pa = paymentAddress(await body(req))
-  const [m] = await sql`select id, wallet_address from members where invite_code = ${code}`
+  const [m] = await sql`select m.id, m.wallet_address from members m join orgs o on o.id = m.org_id where m.invite_code = ${code} and o.chain_id = ${arc.id}`
   if (!m) throw new HttpError(404, 'invite not found')
   if (m.wallet_address && m.wallet_address !== address) throw new HttpError(409, 'invite already used by another wallet')
   await sql`
@@ -333,7 +337,7 @@ async function catchUp() {
     const [{ locked }] = await reserved`select pg_try_advisory_lock(${INDEX_LOCK}) as locked`
     if (!locked) return
     try {
-      const vault = VAULT.toLowerCase()
+      const vault = `${arc.id}:${VAULT.toLowerCase()}`
       const [state] = await reserved`select last_block, vault from index_state where id = 1`
       const sameVault = state !== undefined && state.vault === vault
       if (state && !sameVault) {
@@ -426,7 +430,7 @@ let relayerClient: ReturnType<typeof createRelayer> | undefined
 function createRelayer() {
   const key = process.env.RELAYER_PRIVATE_KEY
   if (!key) throw new HttpError(503, 'relayer not configured')
-  return createWalletClient({ account: privateKeyToAccount(key as `0x${string}`), chain: arcTestnet, transport: http() })
+  return createWalletClient({ account: privateKeyToAccount(key as `0x${string}`), chain: arc, transport: http() })
 }
 const relayer = () => (relayerClient ??= createRelayer())
 

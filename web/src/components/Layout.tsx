@@ -6,6 +6,7 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 import { Toaster } from '@/components/ui/sonner'
 import { useTheme } from '@/lib/theme'
 import { useSession } from '@/lib/session'
+import { arc } from '@/lib/veilpay/config'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   cn('relative py-1 transition-colors hover:text-foreground', isActive && 'text-foreground after:absolute after:inset-x-0 after:-bottom-[1.15rem] after:h-px after:bg-seal')
@@ -29,7 +30,7 @@ export function Layout() {
             <NavLink to="/docs" className={navClass}>Docs</NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-4 [&_button]:whitespace-nowrap">
-            <span className="eyebrow hidden lg:inline">Arc Testnet</span>
+            <span className="eyebrow hidden lg:inline">{arc.name}</span>
             <ThemeToggle className="hidden sm:inline-flex" />
             <ConnectButton chainStatus="icon" showBalance={false} accountStatus="address" />
           </div>

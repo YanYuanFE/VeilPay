@@ -17,9 +17,9 @@ import { fmtAmount, parseAmount, reportError, short } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import { myNotes, withdraw, type Stage } from '@/lib/veilpay/actions'
 import { formatUnits } from 'viem'
-import { relayQuote } from '@/lib/veilpay/chain'
+import { loadAssets, relayQuote } from '@/lib/veilpay/chain'
 import { stageText } from '@/lib/records'
-import { ASSETS, EXPLORER, USDC, VAULT, assetOf } from '@/lib/veilpay/config'
+import { ASSETS, EXPLORER, USDC, VAULT, arc, assetOf } from '@/lib/veilpay/config'
 import { disclosureFor, disclosureUrl } from '@/lib/veilpay/disclosure'
 import type { Note, Wallet } from '@/lib/veilpay/crypto'
 
@@ -140,13 +140,16 @@ function MyPayContent({ w }: { w: Wallet }) {
   const [selected, setSelected] = useState<Row | null>(null)
   const [sharing, setSharing] = useState<Row | null>(null)
   const load = useCallback(async () => {
-    setRows((await myNotes(w)).filter((n) => n.amount > 0n).sort((a, b) => b.index - a.index))
+    const notes = (await myNotes(w)).filter((n) => n.amount > 0n).sort((a, b) => b.index - a.index)
+    await loadAssets(notes.map((n) => n.asset))
+    setRows(notes)
   }, [w])
   useEffect(() => { load().catch(reportError) }, [load])
 
   const mismatch = me?.memberships.filter((m) => m.owner_tag && m.owner_tag !== w.ownerTag.toString()) ?? []
   const unspent = rows?.filter((r) => !r.spent) ?? []
-  const totals = ASSETS.map((a) => ({ asset: a, total: unspent.filter((r) => assetOf(r.asset) === a).reduce((s, r) => s + r.amount, 0n) }))
+  const held = [...new Set([...ASSETS, ...unspent.map((r) => assetOf(r.asset))])]
+  const totals = held.map((a) => ({ asset: a, total: unspent.filter((r) => assetOf(r.asset) === a).reduce((s, r) => s + r.amount, 0n) }))
 
   const exportCsv = () => downloadCsv(`veilpay-payments-${new Date().toISOString().slice(0, 10)}.csv`,
     [['memo', 'amount', 'asset', 'block', 'note_index', 'status', 'commitment'],
@@ -164,7 +167,7 @@ function MyPayContent({ w }: { w: Wallet }) {
           ['Block', r.blockNumber.toString()],
           ['Note index', String(r.index)],
           ['Commitment', `0x${r.commitment.toString(16).padStart(64, '0')}`],
-          ['Vault', `${VAULT} (Arc Testnet)`],
+          ['Vault', `${VAULT} (${arc.name})`],
           ['Explorer', `${EXPLORER}/address/${VAULT}`],
         ],
         footnote: 'Decrypted locally with your VeilPay key. To let a third party verify this payment, use “Share proof” in VeilPay instead of this printout.',

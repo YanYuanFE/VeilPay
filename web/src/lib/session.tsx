@@ -9,7 +9,8 @@ import { createSiweMessage } from 'viem/siwe'
 import { useAccount, useWalletClient, WagmiProvider } from 'wagmi'
 import { api } from './api'
 import { reportError } from './format'
-import { arcTestnet, SEED_MESSAGE } from './veilpay/config'
+import { loadAssets } from './veilpay/chain'
+import { arc, SEED_MESSAGE } from './veilpay/config'
 import { ready, seedFromSignature, walletFromSeed, type Wallet } from './veilpay/crypto'
 import { ThemeProvider, useTheme } from './theme'
 import { wagmiConfig } from './wagmi'
@@ -52,7 +53,9 @@ function SessionProvider({ children }: { children: ReactNode }) {
   const { data: walletClient } = useWalletClient()
 
   const refresh = useCallback(async () => {
-    setMe(await api<Me>('/me'))
+    const me = await api<Me>('/me')
+    if (me.address) await loadAssets(me.orgs.map((o) => o.asset)) // signed out: /me returns only { address: null }
+    setMe(me)
   }, [])
 
   useEffect(() => {
@@ -129,7 +132,7 @@ function SessionProvider({ children }: { children: ReactNode }) {
 
   return (
     <RainbowKitAuthenticationProvider adapter={adapter} status={status}>
-      <RainbowKitProvider locale="en-US" initialChain={arcTestnet} theme={rkTheme}>
+      <RainbowKitProvider locale="en-US" initialChain={arc} theme={rkTheme}>
         <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
       </RainbowKitProvider>
     </RainbowKitAuthenticationProvider>
