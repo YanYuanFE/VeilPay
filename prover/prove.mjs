@@ -1,6 +1,7 @@
 // Usage: node prover/prove.mjs '<json>'  (or import { prove })
 // Builds the Merkle tree from all leaves, generates a transaction proof, returns ABI words:
-// a[2], b[2][2] (EVM order), c[2], root, nullifier, outCommitments[4].
+// a[2], b[2][2] (EVM order), c[2], root, nullifier, outCommitments[16].
+// req.noteAsset is the private asset of every note; req.asset the public one (0 when nothing enters or leaves).
 import { buildPoseidon } from "circomlibjs";
 import * as snarkjs from "snarkjs";
 import sha3 from "js-sha3";
@@ -8,11 +9,11 @@ import sha3 from "js-sha3";
 const LEVELS = 20;
 export const FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 // the one copy of the proving artifacts, also served by the web app; must match the deployed verifier
-const ZK = new URL("../web/public/zk/v2/", import.meta.url).pathname;
+const ZK = new URL("../web/public/zk/v3/", import.meta.url).pathname;
 
 const poseidon = await buildPoseidon();
 export const H = (...xs) => poseidon.F.toObject(poseidon(xs));
-export const noteCommitment = (domainTag, ownerTag, amount, rho) => H(domainTag, ownerTag, amount, rho);
+export const noteCommitment = (domainTag, ownerTag, asset, amount, rho) => H(domainTag, ownerTag, asset, amount, rho);
 export const nullifierOf = (spendSecret, commitment) => H(1n, spendSecret, commitment);
 const ZERO_LEAF = BigInt("0x" + sha3.keccak256("veilpay.zero")) % FIELD;
 
@@ -36,10 +37,11 @@ export async function prove(req) {
   const domainTag = big(req.domainTag);
   const leaves = req.leaves.map(big);
   const inp = req.in;
+  const noteAsset = big(req.noteAsset);
   const inIndex = Number(inp.index ?? 0);
 
   const inOwner = H(big(inp.spendSecret));
-  const inCommitment = noteCommitment(domainTag, inOwner, big(inp.amount), big(inp.rho));
+  const inCommitment = noteCommitment(domainTag, inOwner, noteAsset, big(inp.amount), big(inp.rho));
   const nullifier = nullifierOf(big(inp.spendSecret), inCommitment);
   const { siblings, root } = merklePath(leaves, inIndex);
 
@@ -47,12 +49,12 @@ export async function prove(req) {
     const ownerTag = o.ownerTag !== undefined ? big(o.ownerTag) : H(big(o.ownerSecret));
     return { ownerTag, amount: big(o.amount), rho: big(o.rho) };
   });
-  const outCommitment = outs.map((o) => noteCommitment(domainTag, o.ownerTag, o.amount, o.rho));
+  const outCommitment = outs.map((o) => noteCommitment(domainTag, o.ownerTag, noteAsset, o.amount, o.rho));
 
   const input = {
     root, nullifier, outCommitment,
     depositAmount: big(req.depositAmount), withdrawAmount: big(req.withdrawAmount), fee: big(req.fee),
-    extDataHash: big(req.extDataHash), domainTag,
+    asset: big(req.asset), extDataHash: big(req.extDataHash), domainTag, noteAsset,
     inSpendSecret: big(inp.spendSecret), inAmount: big(inp.amount), inRho: big(inp.rho), inIndex,
     inSiblings: siblings,
     outOwnerTag: outs.map((o) => o.ownerTag), outAmount: outs.map((o) => o.amount), outRho: outs.map((o) => o.rho),

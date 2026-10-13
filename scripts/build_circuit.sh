@@ -24,7 +24,7 @@ $SNARK zkey export verificationkey $B/transaction_final.zkey $B/transaction_vkey
 
 $SNARK zkey export solidityverifier $B/transaction_final.zkey contracts/src/TransactionVerifier.sol
 # a new setup needs a new verifier deployment and a new /zk/vN path (artifacts are cached immutably)
-mkdir -p web/public/zk/v2
-cp $B/transaction_js/transaction.wasm $B/transaction_final.zkey web/public/zk/v2/
+mkdir -p web/public/zk/v3
+cp $B/transaction_js/transaction.wasm $B/transaction_final.zkey web/public/zk/v3/
 sed -i '' 's/contract Groth16Verifier/contract TransactionVerifier/' contracts/src/TransactionVerifier.sol
 node -e 'import("circomlibjs").then(m=>process.stdout.write(m.poseidonContract.createCode(2)))' > $B/poseidon2.hex

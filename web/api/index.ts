@@ -4,9 +4,12 @@
 import { randomBytes } from 'node:crypto'
 import { SignJWT, jwtVerify } from 'jose'
 import postgres from 'postgres'
-import { createPublicClient, getAddress, http, isAddress, parseAbiItem, type Address } from 'viem'
+import { BaseError, createPublicClient, createWalletClient, getAddress, http, isAddress, parseAbiItem, type Address, type ContractFunctionArgs } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { parseSiweMessage } from 'viem/siwe'
-import { LOG_SPAN, VAULT, VAULT_DEPLOY_BLOCK, arcTestnet } from '../src/lib/veilpay/config.js'
+import { ASSETS, LOG_SPAN, N_OUTS, USDC, VAULT, VAULT_DEPLOY_BLOCK, arcTestnet } from '../src/lib/veilpay/config.js'
+import { RELAY_GAS, relayFee } from '../src/lib/veilpay/relay.js'
+import { vaultAbi } from '../src/lib/veilpay/vaultAbi.js'
 
 const FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n
 const SESSION_COOKIE = 'vp_session'
@@ -44,6 +47,8 @@ const SCHEMA = `
   create index if not exists orgs_owner on orgs(owner_address);
   -- default amounts per member, sealed to the employer's view key in the browser; the server stores ciphertext only
   alter table orgs add column if not exists salary_book text;
+  -- payroll token, fixed at creation; orgs created before multi-asset support paid in USDC
+  alter table orgs add column if not exists asset text not null default '0x3600000000000000000000000000000000000000';
   create table if not exists members (
     id uuid primary key default gen_random_uuid(),
     org_id uuid not null references orgs(id) on delete cascade,
@@ -189,7 +194,7 @@ async function verify(req: Request) {
 async function me(req: Request) {
   const address = await sessionAddress(req)
   if (!address) return json({ address: null })
-  const orgs = await sql`select id, name, created_at from orgs where owner_address = ${address} order by created_at desc`
+  const orgs = await sql`select id, name, asset, created_at from orgs where owner_address = ${address} order by created_at desc`
   const memberships = await sql`
     select m.id, m.name, m.org_id, o.name as org_name, m.owner_tag, m.joined_at
     from members m join orgs o on o.id = m.org_id
@@ -208,12 +213,14 @@ async function ownedOrg(orgId: string, address: Address) {
 
 async function createOrg(req: Request) {
   const address = await requireSession(req)
-  const b = await body<{ name?: unknown; ownerTag?: unknown; viewPub?: unknown }>(req)
+  const b = await body<{ name?: unknown; ownerTag?: unknown; viewPub?: unknown; asset?: unknown }>(req)
   const name = text(b.name, 'name', 100)
   const pa = paymentAddress(b)
+  const asset = ASSETS.find((a) => typeof b.asset === 'string' && a.address.toLowerCase() === b.asset.toLowerCase())
+  if (!asset) throw new HttpError(400, 'asset must be one of the vault allowlist')
   const [org] = await sql`
-    insert into orgs (name, owner_address, owner_tag, view_pub) values (${name}, ${address}, ${pa.ownerTag}, ${pa.viewPub})
-    returning id, name, created_at`
+    insert into orgs (name, owner_address, owner_tag, view_pub, asset) values (${name}, ${address}, ${pa.ownerTag}, ${pa.viewPub}, ${asset.address})
+    returning id, name, asset, created_at`
   return json(org, 201)
 }
 
@@ -223,7 +230,7 @@ async function getOrg(req: Request, orgId: string) {
   const members = await sql`
     select id, name, email, invite_code, wallet_address, owner_tag, view_pub, joined_at, created_at
     from members where org_id = ${org.id} order by created_at, name`
-  return json({ org: { id: org.id, name: org.name, owner_tag: org.owner_tag, view_pub: org.view_pub, salary_book: org.salary_book }, members })
+  return json({ org: { id: org.id, name: org.name, asset: org.asset, owner_tag: org.owner_tag, view_pub: org.view_pub, salary_book: org.salary_book }, members })
 }
 
 async function addMembers(req: Request, orgId: string) {
@@ -254,10 +261,10 @@ async function removeMember(req: Request, orgId: string, memberId: string) {
 
 async function getInvite(code: string) {
   const [m] = await sql`
-    select m.name, m.joined_at, m.wallet_address, o.name as org_name
+    select m.name, m.joined_at, m.wallet_address, o.name as org_name, o.asset as org_asset
     from members m join orgs o on o.id = m.org_id where m.invite_code = ${code}`
   if (!m) throw new HttpError(404, 'invite not found')
-  return json({ orgName: m.org_name, memberName: m.name, joined: m.joined_at !== null, wallet: m.wallet_address })
+  return json({ orgName: m.org_name, asset: m.org_asset, memberName: m.name, joined: m.joined_at !== null, wallet: m.wallet_address })
 }
 
 async function acceptInvite(req: Request, code: string) {
@@ -404,6 +411,139 @@ async function stats() {
   return json({ notes: row.notes, spent: row.spent, lastBlock: row.last_block === null ? null : String(row.last_block) })
 }
 
+// ---------- relayer ----------
+// Submits proven transactions from its own account so the user needs no gas and no public sender address.
+// The proof binds recipient, fee and feeRecipient, so the relayer can only take the fee it was offered.
+// USDC only: its gas is paid in USDC, so a fee in another asset would need a price feed.
+
+const RELAY_LOCK = 5042003
+type TxArgs = ContractFunctionArgs<typeof vaultAbi, 'nonpayable', 'transact'>[0]
+type ExtData = ContractFunctionArgs<typeof vaultAbi, 'nonpayable', 'transact'>[1]
+type Permit = ContractFunctionArgs<typeof vaultAbi, 'nonpayable', 'transactWithPermit2'>[2]
+type Authorization = ContractFunctionArgs<typeof vaultAbi, 'nonpayable', 'transactWithAuthorization'>[2]
+
+let relayerClient: ReturnType<typeof createRelayer> | undefined
+function createRelayer() {
+  const key = process.env.RELAYER_PRIVATE_KEY
+  if (!key) throw new HttpError(503, 'relayer not configured')
+  return createWalletClient({ account: privateKeyToAccount(key as `0x${string}`), chain: arcTestnet, transport: http() })
+}
+const relayer = () => (relayerClient ??= createRelayer())
+
+async function relayQuote() {
+  const { account } = relayer()
+  return json({ address: account.address, fee: relayFee(RELAY_GAS, await chain.getGasPrice()).toString() })
+}
+
+function uint(v: unknown, field: string): bigint {
+  if (typeof v !== 'string' || !/^\d{1,78}$/.test(v)) throw new HttpError(400, `invalid ${field}`)
+  return BigInt(v)
+}
+
+function uints(v: unknown, n: number, field: string): bigint[] {
+  if (!Array.isArray(v) || v.length !== n) throw new HttpError(400, `${field} must have ${n} items`)
+  return v.map((x, i) => uint(x, `${field}[${i}]`))
+}
+
+function address(v: unknown, field: string): Address {
+  if (typeof v !== 'string' || !isAddress(v)) throw new HttpError(400, `invalid ${field}`)
+  return getAddress(v)
+}
+
+const obj = (v: unknown, field: string) => {
+  if (!v || typeof v !== 'object') throw new HttpError(400, `${field} required`)
+  return v as Record<string, unknown>
+}
+
+function relayArgs(raw: unknown): TxArgs {
+  const t = obj(raw, 'args')
+  const p = obj(t.proof, 'args.proof')
+  if (!Array.isArray(p.b) || p.b.length !== 2) throw new HttpError(400, 'args.proof.b must have 2 rows')
+  return {
+    proof: { a: uints(p.a, 2, 'proof.a'), b: p.b.map((r, i) => uints(r, 2, `proof.b[${i}]`)), c: uints(p.c, 2, 'proof.c') },
+    root: uint(t.root, 'root'), nullifier: uint(t.nullifier, 'nullifier'), outCommitments: uints(t.outCommitments, N_OUTS, 'outCommitments'),
+    asset: address(t.asset, 'asset'),
+    depositAmount: uint(t.depositAmount, 'depositAmount'), withdrawAmount: uint(t.withdrawAmount, 'withdrawAmount'), fee: uint(t.fee, 'fee'),
+  } as unknown as TxArgs
+}
+
+function relayExt(raw: unknown): ExtData {
+  const e = obj(raw, 'ext')
+  const cts = e.encryptedOutputs
+  if (!Array.isArray(cts) || cts.length !== N_OUTS || !cts.every((c) => typeof c === 'string' && /^0x[0-9a-f]{0,2000}$/i.test(c))) {
+    throw new HttpError(400, `ext.encryptedOutputs must be ${N_OUTS} hex strings`)
+  }
+  return { recipient: address(e.recipient, 'ext.recipient'), feeRecipient: address(e.feeRecipient, 'ext.feeRecipient'), encryptedOutputs: cts } as unknown as ExtData
+}
+
+function relayPermit(raw: unknown): Permit {
+  const p = obj(raw, 'permit')
+  if (typeof p.signature !== 'string' || !/^0x[0-9a-f]{130}$/i.test(p.signature)) throw new HttpError(400, 'invalid permit.signature')
+  return { owner: address(p.owner, 'permit.owner'), nonce: uint(p.nonce, 'permit.nonce'), deadline: uint(p.deadline, 'permit.deadline'), signature: p.signature as `0x${string}` }
+}
+
+function relayAuthorization(raw: unknown): Authorization {
+  const a = obj(raw, 'authorization')
+  const b32 = (v: unknown, f: string) => {
+    if (typeof v !== 'string' || !/^0x[0-9a-f]{64}$/i.test(v)) throw new HttpError(400, `invalid authorization.${f}`)
+    return v as `0x${string}`
+  }
+  if (a.v !== 27 && a.v !== 28) throw new HttpError(400, 'invalid authorization.v')
+  return {
+    from: address(a.from, 'authorization.from'), validAfter: uint(a.validAfter, 'authorization.validAfter'),
+    validBefore: uint(a.validBefore, 'authorization.validBefore'), v: a.v, r: b32(a.r, 'r'), s: b32(a.s, 's'),
+  }
+}
+
+async function relay(req: Request) {
+  const wallet = relayer()
+  const b = await body<{ args?: unknown; ext?: unknown; permit?: unknown; authorization?: unknown }>(req)
+  const args = relayArgs(b.args)
+  const ext = relayExt(b.ext)
+  if (b.permit !== undefined && b.authorization !== undefined) throw new HttpError(400, 'send either permit or authorization')
+  const permit = b.permit === undefined ? null : relayPermit(b.permit)
+  const authorization = b.authorization === undefined ? null : relayAuthorization(b.authorization)
+  if (args.asset !== getAddress(USDC.address)) throw new HttpError(400, 'relayer only accepts USDC')
+  // without a signature from the depositor, a deposit would pull USDC from the relayer's own account
+  if (!permit && !authorization && args.depositAmount !== 0n) throw new HttpError(400, 'deposits must carry a Permit2 or EIP-3009 signature')
+  if (ext.feeRecipient !== wallet.account.address) throw new HttpError(400, 'feeRecipient must be the relayer')
+
+  const account = wallet.account
+  // estimating runs the full call: an invalid proof or permit, spent note or blocklisted address fails here without gas
+  let gas: bigint
+  try {
+    gas = authorization
+      ? await chain.estimateContractGas({ address: VAULT, abi: vaultAbi, functionName: 'transactWithAuthorization', args: [args, ext, authorization], account })
+      : permit
+        ? await chain.estimateContractGas({ address: VAULT, abi: vaultAbi, functionName: 'transactWithPermit2', args: [args, ext, permit], account })
+        : await chain.estimateContractGas({ address: VAULT, abi: vaultAbi, functionName: 'transact', args: [args, ext], account })
+  } catch (err) {
+    throw new HttpError(400, err instanceof BaseError ? err.shortMessage : 'simulation failed')
+  }
+  const cost = relayFee(gas, await chain.getGasPrice())
+  if (args.fee < cost) throw new HttpError(400, `fee ${args.fee} is below the current cost ${cost}; request a new quote`)
+
+  // one sender key across function instances: serialize nonce assignment
+  const reserved = await sql.reserve()
+  try {
+    await reserved`select pg_advisory_lock(${RELAY_LOCK})`
+    try {
+      const nonce = await chain.getTransactionCount({ address: wallet.account.address, blockTag: 'pending' })
+      const limit = gas * 12n / 10n
+      const hash = authorization
+        ? await wallet.writeContract({ address: VAULT, abi: vaultAbi, functionName: 'transactWithAuthorization', args: [args, ext, authorization], gas: limit, nonce })
+        : permit
+          ? await wallet.writeContract({ address: VAULT, abi: vaultAbi, functionName: 'transactWithPermit2', args: [args, ext, permit], gas: limit, nonce })
+          : await wallet.writeContract({ address: VAULT, abi: vaultAbi, functionName: 'transact', args: [args, ext], gas: limit, nonce })
+      return json({ hash })
+    } finally {
+      await reserved`select pg_advisory_unlock(${RELAY_LOCK})`
+    }
+  } finally {
+    reserved.release()
+  }
+}
+
 // ---------- router ----------
 
 type Handler = (req: Request, ...params: string[]) => Promise<Response>
@@ -424,6 +564,10 @@ const routes: [string, RegExp, Handler][] = [
   ['POST', /^\/api\/invites\/([A-Za-z0-9_-]+)\/accept$/, acceptInvite],
   ['GET', /^\/api\/events$/, (r) => events(r)],
   ['GET', /^\/api\/stats$/, () => stats()],
+  ['GET', /^\/api\/relay$/, () => relayQuote()],
+  ['POST', /^\/api\/relay$/, (r) => relay(r)],
+  ['GET', /^\/api\/relay$/, () => relayQuote()],
+  ['POST', /^\/api\/relay$/, (r) => relay(r)],
 ]
 
 export async function handle(req: Request): Promise<Response> {

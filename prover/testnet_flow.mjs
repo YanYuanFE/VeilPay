@@ -1,4 +1,4 @@
-// Arc testnet end-to-end flow against a deployed VeilPayVault, driven by cast so USDC runs on real Arc nodes.
+// Arc testnet end-to-end flow against a deployed VeilPayVault (v3 ABI, USDC notes), driven by cast so USDC runs on real Arc nodes.
 // Usage: PRIVATE_KEY=0x.. node prover/testnet_flow.mjs <vault> <deployBlock> <reportPath>
 // Steps: deposit 1 USDC -> private payroll 0.2/0.3/0.4 + 0.1 change -> each party scans and decrypts
 //        -> Bob withdraws 0.15 + 0.01 fee, 0.14 change -> Bob's balance rebuilt from seed + chain events only.
@@ -14,8 +14,9 @@ const USDC = "0x3600000000000000000000000000000000000000";
 const U = 1_000_000n;
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
 const N_OUTS = 16
+const ASSET = BigInt(USDC);
 const TRANSACT_SIG =
-  `transact((uint256[2],uint256[2][2],uint256[2]),uint256,uint256,uint256[${N_OUTS}],uint64,uint64,uint64,(address,address,bytes[${N_OUTS}]))`;
+  `transact(((uint256[2],uint256[2][2],uint256[2]),uint256,uint256,uint256[${N_OUTS}],address,uint64,uint64,uint64),(address,address,bytes[${N_OUTS}]))`;
 
 const [vault, deployBlock, reportPath] = process.argv.slice(2);
 const key = process.env.PRIVATE_KEY;
@@ -68,22 +69,24 @@ function shuffle(xs) {
 
 const steps = [];
 async function transact(name, spender, inNote, outNotes, dep, wd, fee, recipient, feeRecipient) {
-  const outs = shuffle([...outNotes, ...Array.from({ length: N_OUTS - outNotes.length }, dummyNote)]);
+  const outs = shuffle([...outNotes, ...Array.from({ length: N_OUTS - outNotes.length }, () => dummyNote(ASSET))]);
   const tuple = `(${recipient},${feeRecipient},[${outs.map((o) => o.ciphertext).join(",")}])`;
   const extDataHash = first(cast("call", vault, `hashExtData((address,address,bytes[${N_OUTS}]))(uint256)`, tuple));
   const input = inNote
     ? { spendSecret: spender.spendSecret.toString(), amount: inNote.amount.toString(), rho: inNote.rho.toString(), index: inNote.index }
     : { spendSecret: randomField().toString(), amount: "0", rho: "0", index: 0 };
+  const pubAsset = dep > 0n || wd > 0n || fee > 0n ? USDC : ZERO_ADDR;
   const w = await prove({
     domainTag, extDataHash, depositAmount: dep.toString(), withdrawAmount: wd.toString(), fee: fee.toString(),
+    asset: BigInt(pubAsset).toString(), noteAsset: ASSET.toString(),
     leaves: chainEvents().map((e) => e.commitment.toString()), in: input,
     outs: outs.map((o) => ({ ownerTag: o.ownerTag.toString(), amount: o.amount.toString(), rho: o.rho.toString() })),
   });
   const onchainRoot = first(cast("call", vault, "currentRoot()(uint256)"));
   if (onchainRoot !== w[8].toString()) throw new Error(`${name}: prover root ${w[8]} != vault root ${onchainRoot}`);
 
-  const args = [`([${w[0]},${w[1]}],[[${w[2]},${w[3]}],[${w[4]},${w[5]}]],[${w[6]},${w[7]}])`, w[8].toString(), w[9].toString(),
-    `[${w.slice(10).join(",")}]`, dep.toString(), wd.toString(), fee.toString(), tuple];
+  const proof = `([${w[0]},${w[1]}],[[${w[2]},${w[3]}],[${w[4]},${w[5]}]],[${w[6]},${w[7]}])`;
+  const args = [`(${proof},${w[8]},${w[9]},[${w.slice(10).join(",")}],${pubAsset},${dep},${wd},${fee})`, tuple];
   const receipt = JSON.parse(cast("send", "--json", "--private-key", key, vault, TRANSACT_SIG, ...args));
   if (receipt.status !== "0x1") throw new Error(`${name} failed: ${receipt.transactionHash}`);
   steps.push({ name, tx: receipt.transactionHash, block: Number(receipt.blockNumber), gasUsed: Number(receipt.gasUsed) });
@@ -104,16 +107,16 @@ if (approve.status !== "0x1") throw new Error("approve failed");
 
 // 1. employer deposits 1 USDC into its own note
 await transact("deposit", null, null,
-  [encryptNote(employer.address, U, "treasury deposit"), dummyNote(), dummyNote(), dummyNote()], U, 0n, 0n, ZERO_ADDR, ZERO_ADDR);
+  [encryptNote(employer.address, ASSET, U, "treasury deposit"), dummyNote(ASSET), dummyNote(ASSET), dummyNote(ASSET)], U, 0n, 0n, ZERO_ADDR, ZERO_ADDR);
 
 // 2. employer finds its note by scanning, then pays three employees by payment address
 const funding = unspent(employer).find((n) => n.amount === U && n.memo === "treasury deposit");
 if (!funding) throw new Error("employer cannot find its deposit note");
 await transact("payroll", employer, funding, [
-  encryptNote(alice.address, U * 2n / 10n, "2026-10 salary"),
-  encryptNote(bob.address, U * 3n / 10n, "2026-10 salary"),
-  encryptNote(carol.address, U * 4n / 10n, "2026-10 salary"),
-  encryptNote(employer.address, U / 10n, "payroll change"),
+  encryptNote(alice.address, ASSET, U * 2n / 10n, "2026-10 salary"),
+  encryptNote(bob.address, ASSET, U * 3n / 10n, "2026-10 salary"),
+  encryptNote(carol.address, ASSET, U * 4n / 10n, "2026-10 salary"),
+  encryptNote(employer.address, ASSET, U / 10n, "payroll change"),
 ], 0n, 0n, 0n, ZERO_ADDR, ZERO_ADDR);
 
 // 3. each party sees only its own notes
@@ -124,7 +127,7 @@ const visibility = { employer: view(employer), alice: view(alice), bob: view(bob
 const bobNote = unspent(bob).find((n) => n.amount === U * 3n / 10n);
 if (!bobNote) throw new Error("bob cannot find his salary note");
 const wdArgs = await transact("withdraw", bob, bobNote,
-  [encryptNote(bob.address, U * 14n / 100n, "change after withdrawal"), dummyNote(), dummyNote(), dummyNote()],
+  [encryptNote(bob.address, ASSET, U * 14n / 100n, "change after withdrawal"), dummyNote(ASSET), dummyNote(ASSET), dummyNote(ASSET)],
   0n, U * 15n / 100n, U / 100n, employeeWallet, me);
 
 // 5. recovery: a fresh wallet object from Bob's seed alone, rebuilt from chain events
@@ -158,7 +161,7 @@ const str = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v.to
 const report = {
   checked_at_utc: new Date().toISOString(), network: "testnet", chain_id: 5042002,
   vault, deployer: me, employee_wallet: employeeWallet, deploy_block: Number(deployBlock),
-  note_encryption: "libsodium crypto_box_seal (X25519 + XSalsa20-Poly1305), 105-byte plaintext, 153-byte ciphertext",
+  note_encryption: "libsodium crypto_box_seal (X25519 + XSalsa20-Poly1305), 125-byte plaintext, 173-byte ciphertext",
   approve_tx: approve.transactionHash, steps, visibility_after_payroll: visibility, bob_recovered_unspent: recovered,
   double_spend: doubleSpend, usdc_6dec: { before: str(before), after: str(after) },
   checks, passed: Object.values(checks).every(Boolean),

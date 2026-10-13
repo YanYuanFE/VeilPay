@@ -19,7 +19,11 @@ interface Vm {
     function expectRevert(bytes calldata) external;
     function expectRevert() external;
     function envUint(string calldata) external view returns (uint256);
+    function envOr(string calldata, address) external view returns (address);
     function addr(uint256) external pure returns (address);
+    function sign(uint256, bytes32) external pure returns (uint8, bytes32, bytes32);
+    function etch(address, bytes calldata) external;
+    function chainId(uint256) external;
     function startBroadcast(uint256) external;
     function stopBroadcast() external;
 }
@@ -43,13 +47,7 @@ abstract contract ProverBase {
     }
 
     struct Tx {
-        VeilPayVault.Proof proof;
-        uint256 root;
-        uint256 nullifier;
-        uint256[N] commitments;
-        uint64 dep;
-        uint64 wd;
-        uint64 fee;
+        VeilPayVault.TxArgs args;
         VeilPayVault.ExtData ext;
     }
 
@@ -62,53 +60,77 @@ abstract contract ProverBase {
         for (uint256 i; i < N; i++) e.encryptedOutputs[i] = abi.encodePacked("ciphertext-", uint8(i));
     }
 
-    /// `outs` holds the real outputs (at most N); the rest are padded with zero-value placeholders.
-    function _prove(Note memory n, Out[] memory outs, uint64 dep, uint64 wd, uint64 fee, VeilPayVault.ExtData memory ext)
+    /// Public asset as the vault expects it: the notes' asset when value moves, otherwise hidden (zero).
+    function _publicAsset(address noteAsset, uint64 dep, uint64 wd, uint64 fee) internal pure returns (address) {
+        return dep > 0 || wd > 0 || fee > 0 ? noteAsset : address(0);
+    }
+
+    /// `outs` holds the real outputs (at most N); the rest are padded with zero-value placeholders. All notes are `asset`.
+    function _prove(Note memory n, address asset, Out[] memory outs, uint64 dep, uint64 wd, uint64 fee, VeilPayVault.ExtData memory ext)
         internal
         returns (Tx memory t)
     {
+        address pubAsset = _publicAsset(asset, dep, wd, fee);
         // abi.decode needs a literal length: 26 = 10 proof/root/nullifier words + N commitments
-        uint256[26] memory w = abi.decode(vm.ffi(_proveCmd(n, outs, dep, wd, fee, ext)), (uint256[26]));
+        uint256[26] memory w = abi.decode(vm.ffi(_proveCmd(n, asset, pubAsset, outs, dep, wd, fee, ext)), (uint256[26]));
         require(w.length == 10 + N, "prover word count");
-        t.proof.a = [w[0], w[1]];
-        t.proof.b = [[w[2], w[3]], [w[4], w[5]]];
-        t.proof.c = [w[6], w[7]];
-        t.root = w[8];
-        t.nullifier = w[9];
-        for (uint256 i; i < N; i++) t.commitments[i] = w[10 + i];
-        t.dep = dep;
-        t.wd = wd;
-        t.fee = fee;
+        t.args.proof.a = [w[0], w[1]];
+        t.args.proof.b = [[w[2], w[3]], [w[4], w[5]]];
+        t.args.proof.c = [w[6], w[7]];
+        t.args.root = w[8];
+        t.args.nullifier = w[9];
+        for (uint256 i; i < N; i++) t.args.outCommitments[i] = w[10 + i];
+        t.args.asset = pubAsset;
+        t.args.depositAmount = dep;
+        t.args.withdrawAmount = wd;
+        t.args.fee = fee;
         t.ext = ext;
     }
 
-    function _proveCmd(Note memory n, Out[] memory outs, uint64 dep, uint64 wd, uint64 fee, VeilPayVault.ExtData memory ext)
-        internal
-        view
-        returns (string[] memory cmd)
-    {
-        string memory ls;
+    function _proveCmd(
+        Note memory n,
+        address noteAsset,
+        address pubAsset,
+        Out[] memory outs,
+        uint64 dep,
+        uint64 wd,
+        uint64 fee,
+        VeilPayVault.ExtData memory ext
+    ) internal view returns (string[] memory cmd) {
+        string memory head = string.concat(
+            _head(dep, wd, fee, ext), ',"asset":', _q(uint160(pubAsset)), ',"noteAsset":', _q(uint160(noteAsset))
+        );
+        cmd = new string[](3);
+        cmd[0] = "node";
+        cmd[1] = "../prover/prove.mjs";
+        cmd[2] = string.concat(head, ',"leaves":[', _leavesJson(), '],"in":', _noteJson(n), ',"outs":[', _outsJson(outs), "]}");
+    }
+
+    function _leavesJson() internal view returns (string memory ls) {
         for (uint256 i; i < leaves.length; i++) ls = string.concat(ls, i == 0 ? "" : ",", _q(leaves[i]));
-        string memory os;
+    }
+
+    function _outsJson(Out[] memory outs) internal pure returns (string memory os) {
         require(outs.length <= N, "too many outputs");
         for (uint256 i; i < N; i++) {
             Out memory o = i < outs.length ? outs[i] : Out(0x5eed, 0, 1000 + i);
             os = string.concat(os, i == 0 ? "" : ",",
                 '{"ownerSecret":', _q(o.ownerSecret), ',"amount":', _q(o.amount), ',"rho":', _q(o.rho), "}");
         }
-        string memory head = string.concat(
+    }
+
+    function _noteJson(Note memory n) internal pure returns (string memory) {
+        return string.concat(
+            '{"spendSecret":', _q(n.secret), ',"amount":', _q(n.amount), ',"rho":', _q(n.rho), ',"index":', _q(n.index), "}"
+        );
+    }
+
+    function _head(uint64 dep, uint64 wd, uint64 fee, VeilPayVault.ExtData memory ext) internal view returns (string memory) {
+        return string.concat(
             '{"domainTag":', _q(vault.domainTag()),
             ',"extDataHash":', _q(vault.hashExtData(ext)),
             ',"depositAmount":', _q(dep), ',"withdrawAmount":', _q(wd), ',"fee":', _q(fee)
         );
-        string memory inNote = string.concat(
-            '{"spendSecret":', _q(n.secret), ',"amount":', _q(n.amount), ',"rho":', _q(n.rho), ',"index":', _q(n.index), "}"
-        );
-        string memory json = string.concat(head, ',"leaves":[', ls, '],"in":', inNote, ',"outs":[', os, "]}");
-        cmd = new string[](3);
-        cmd[0] = "node";
-        cmd[1] = "../prover/prove.mjs";
-        cmd[2] = json;
     }
 
     function _q(uint256 x) internal pure returns (string memory) {

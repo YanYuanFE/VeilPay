@@ -41,14 +41,14 @@ function Hero({ stats }: { stats: Stats | null }) {
       <div className="pointer-events-none absolute inset-0 -z-10 bg-[linear-gradient(0deg,var(--ink)_8%,color-mix(in_oklch,var(--ink)_75%,transparent)_45%,transparent_75%)] md:bg-[linear-gradient(90deg,var(--ink)_0%,color-mix(in_oklch,var(--ink)_55%,transparent)_38%,transparent_70%)]" />
 
       <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col justify-end px-6 pb-14 pt-32 md:px-10 md:pb-20">
-        <p className="eyebrow animate-rise" style={rise(100)}>Private payroll · USDC on Arc</p>
+        <p className="eyebrow animate-rise" style={rise(100)}>Private payroll · USDC &amp; EURC on Arc</p>
         <h1 className="mt-6 max-w-4xl text-[clamp(3.6rem,10vw,9.5rem)] leading-[0.92] font-medium">
           <span className="block animate-rise" style={rise(180)}>Payroll,</span>
           <span className="block animate-rise italic text-seal" style={rise(320)}>sealed.</span>
         </h1>
         <div className="mt-10 grid max-w-5xl gap-10 md:grid-cols-[1.2fr_1fr] md:items-end">
           <p className="animate-rise text-lg leading-relaxed text-bone/80 md:text-xl" style={rise(520)}>
-            Pay your whole team in USDC from one treasury. The chain verifies that every cent adds up,
+            Pay your whole team in USDC or EURC from one treasury. The chain verifies that every cent adds up,
             and learns none of the salaries. Each employee opens only their own envelope.
           </p>
           <div className="flex animate-rise flex-wrap gap-3" style={rise(640)}>
@@ -138,7 +138,7 @@ function ChainVsYou() {
 }
 
 const LAYERS = [
-  { n: '01', title: 'Deposit', body: 'The treasury moves USDC into the vault once. That amount is public.', tone: 'bg-bone/[0.07]' },
+  { n: '01', title: 'Deposit', body: 'The treasury moves USDC or EURC into the vault once. That amount is public.', tone: 'bg-bone/[0.07]' },
   { n: '02', title: 'Seal & split', body: 'A zero-knowledge proof splits one note into salaries. Totals must balance; amounts stay sealed.', tone: 'bg-seal/25' },
   { n: '03', title: 'Withdraw', body: 'Each employee proves ownership of their note and withdraws whenever they choose.', tone: 'bg-bone/[0.12]' },
 ]
@@ -241,7 +241,9 @@ const PHASES: { tag: string; title: string; status: 'live' | 'next' | 'later'; i
     items: [
       'ZK vault with Groth16 proofs verified on-chain',
       'Notes sealed to each employee; balances decrypted in the browser',
-      'Organizations, bulk invites, 15 people per payroll transaction with safe resume',
+      'USDC or EURC per organization; payroll transactions don’t reveal which token moved',
+      'No gas for users: a relayer submits USDC transactions, and a deposit is one EIP-3009 signature with no approval',
+      'Organizations, CSV roster import, 15 people per payroll transaction with safe resume',
       'Private verification links for landlords, banks and auditors',
     ],
   },
@@ -256,9 +258,16 @@ const PHASES: { tag: string; title: string; status: 'live' | 'next' | 'later'; i
   {
     tag: 'Then', title: 'Mainnet', status: 'next',
     items: [
-      'Relayer for withdrawals, so employees don’t expose a gas-paying wallet',
       'Roster names and emails encrypted per person, with crypto-shredding on removal',
+      'Fund payroll with USDC from any chain through Circle Gateway; withdraw to other chains through CCTP',
       'Launch with USDC on Arc mainnet',
+    ],
+  },
+  {
+    tag: 'Agents', title: 'For AI agents', status: 'next',
+    items: [
+      'Pay AI agents privately: read a VeilPay payment address from an agent’s ERC-8004 identity, no invite needed',
+      'Read-only accounting agents: share a view key so an agent can do bookkeeping and reconciliation but never spend',
     ],
   },
   {
@@ -287,9 +296,9 @@ function Roadmap() {
           </p>
         </div>
 
-        <ol className="relative mt-16 grid gap-px overflow-hidden rounded-lg border border-hairline bg-hairline md:grid-cols-4">
+        <ol className="relative mt-16 grid gap-px overflow-hidden rounded-lg border border-hairline bg-hairline md:grid-cols-2 lg:grid-cols-5">
           {PHASES.map((p) => (
-            <li key={p.tag} className={`relative flex flex-col bg-ink p-7 ${p.status === 'later' ? 'md:bg-card' : ''}`}>
+            <li key={p.tag} className={`relative flex flex-col bg-ink p-7 md:last:col-span-2 lg:last:col-span-1 ${p.status === 'later' ? 'md:bg-card' : ''}`}>
               <div className="flex h-6 items-center gap-3">
                 <span
                   className={`size-2.5 rounded-full ${p.status === 'live' ? 'bg-seal shadow-[0_0_0_4px_color-mix(in_oklch,var(--seal)_22%,transparent)]' : p.status === 'next' ? 'ring-1 ring-bone/50' : 'ring-1 ring-seal'}`}

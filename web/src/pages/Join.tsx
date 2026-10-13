@@ -9,9 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { api } from '@/lib/api'
 import { reportError } from '@/lib/format'
 import { useSession } from '@/lib/session'
+import { assetOf } from '@/lib/veilpay/config'
 import type { Wallet } from '@/lib/veilpay/crypto'
 
-type Invite = { orgName: string; memberName: string; joined: boolean; wallet: string | null }
+type Invite = { orgName: string; asset: string; memberName: string; joined: boolean; wallet: string | null }
 
 function Accept({ code, invite, w }: { code: string; invite: Invite; w: Wallet }) {
   const { refresh } = useSession()
@@ -69,7 +70,7 @@ export function JoinPage() {
         <LogoMark className="mx-auto size-12" />
         <p className="eyebrow mt-8">A sealed invitation</p>
         <h1 className="mt-4 text-4xl leading-tight md:text-5xl">{invite.orgName} <em className="text-muted-foreground">invites</em> {invite.memberName}</h1>
-        <p className="mx-auto mt-4 max-w-md text-muted-foreground">Accept to receive salary in USDC that only you can see and withdraw.</p>
+        <p className="mx-auto mt-4 max-w-md text-muted-foreground">Accept to receive salary in {assetOf(invite.asset).symbol} that only you can see and withdraw.</p>
       </div>
       <RequireLogin>
         <RequireKeys purpose="Your payment key is derived from your wallet so you can recover it on any device.">

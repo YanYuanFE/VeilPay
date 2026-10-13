@@ -1,0 +1,92 @@
+{
+  "checked_at_utc": "2026-10-13T02:50:14.588Z",
+  "network": "testnet",
+  "chain_id": 5042002,
+  "vault": "0x8BDE9530910d448727f098A8847197146DEbeC5E",
+  "deployer": "0xe9324478BF002a53a5dCE31d5cA7Dad336A7ed58",
+  "employee_wallet": "0xd86B764973330Bfe6347AEb7b0292d7c6C58EA1D",
+  "deploy_block": 66918735,
+  "note_encryption": "libsodium crypto_box_seal (X25519 + XSalsa20-Poly1305), 125-byte plaintext, 173-byte ciphertext",
+  "approve_tx": "0x7b6df526816cef3de3aaf441dcfab3fd7924c7aefc8f37ea4468a025f6e3e68f",
+  "steps": [
+    {
+      "name": "deposit",
+      "tx": "0xb787d678357a5d74b4c78a3a53d428dcd82823484a979dcc1124e4a916f3da15",
+      "block": 66920460,
+      "gasUsed": 1650835
+    },
+    {
+      "name": "payroll",
+      "tx": "0xa902a9415da6efa3a9ff994c83a322cfcbacaf0fa89ae5ddede63c0a74665292",
+      "block": 66920472,
+      "gasUsed": 1622924
+    },
+    {
+      "name": "withdraw",
+      "tx": "0xaabedf93b93a8132f43e1acd3ea86512ca628aadb36d2b8b6f7025d04fa353dc",
+      "block": 66920493,
+      "gasUsed": 1668323
+    }
+  ],
+  "visibility_after_payroll": {
+    "employer": [
+      {
+        "amount": "100000",
+        "memo": "payroll change",
+        "index": 67
+      }
+    ],
+    "alice": [
+      {
+        "amount": "200000",
+        "memo": "2026-10 salary",
+        "index": 79
+      }
+    ],
+    "bob": [
+      {
+        "amount": "300000",
+        "memo": "2026-10 salary",
+        "index": 70
+      }
+    ],
+    "carol": [
+      {
+        "amount": "400000",
+        "memo": "2026-10 salary",
+        "index": 77
+      }
+    ],
+    "outsider": []
+  },
+  "bob_recovered_unspent": [
+    "140000"
+  ],
+  "double_spend": "rejected: nullifier spent",
+  "usdc_6dec": {
+    "before": {
+      "me": "13245686",
+      "vault": "200000",
+      "employee": "150000"
+    },
+    "after": {
+      "me": "12104525",
+      "vault": "1040000",
+      "employee": "300000"
+    }
+  },
+  "checks": {
+    "employer_sees_only_change": true,
+    "alice_sees_0_2": true,
+    "bob_sees_0_3": true,
+    "carol_sees_0_4": true,
+    "outsider_sees_nothing": true,
+    "bob_recovered_0_14_from_seed": true,
+    "vault_gained_0_84": true,
+    "employee_received_0_15": true,
+    "double_spend_rejected": true,
+    "leaves_added": true
+  },
+  "passed": true,
+  "scope": "Prototype single-party Groth16 setup; demo seeds derived from deployer key; not audited."
+}

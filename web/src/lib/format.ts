@@ -1,15 +1,19 @@
 import { formatUnits, parseUnits } from 'viem'
 import { toast } from 'sonner'
 import { isUserRejection } from './veilpay/chain'
-import { USDC_DECIMALS } from './veilpay/config'
+import type { Asset } from './veilpay/config'
 
-export const fmtUsdc = (x: bigint) => `${Number(formatUnits(x, USDC_DECIMALS)).toLocaleString('en-US', { maximumFractionDigits: 6 })} USDC`
+/** Number only, e.g. "1,250.5". */
+export const fmtNum = (x: bigint, asset: Asset) =>
+  Number(formatUnits(x, asset.decimals)).toLocaleString('en-US', { maximumFractionDigits: asset.decimals })
 
-/** Parses a user-entered USDC amount into 6-decimal units; throws on malformed or over-precise input. */
-export function parseUsdc(input: string): bigint {
+export const fmtAmount = (x: bigint, asset: Asset) => `${fmtNum(x, asset)} ${asset.symbol}`
+
+/** Parses a user-entered amount into the asset's units; throws on malformed or over-precise input. */
+export function parseAmount(input: string, asset: Asset): bigint {
   const s = input.trim().replace(/,/g, '')
-  if (!/^\d+(\.\d{1,6})?$/.test(s)) throw new Error(`invalid USDC amount: "${input}"`)
-  return parseUnits(s, USDC_DECIMALS)
+  if (!new RegExp(`^\\d+(\\.\\d{1,${asset.decimals}})?$`).test(s)) throw new Error(`invalid ${asset.symbol} amount: "${input}"`)
+  return parseUnits(s, asset.decimals)
 }
 
 export const short = (s: string, head = 6, tail = 4) => (s.length > head + tail + 2 ? `${s.slice(0, head)}…${s.slice(-tail)}` : s)

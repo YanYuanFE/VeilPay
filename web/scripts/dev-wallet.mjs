@@ -8,7 +8,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 
 const RPC = 'https://rpc.testnet.arc.io'
 const CHAIN = { id: 5042002, name: 'Arc Testnet', nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 }, rpcUrls: { default: { http: [RPC] } } }
-const ORIGIN = 'http://localhost:5190'
+const ORIGIN = process.env.ORIGIN ?? 'http://localhost:5190'
 const root = process.env.PRIVATE_KEY
 if (!root) throw new Error('PRIVATE_KEY required')
 
@@ -37,6 +37,11 @@ async function handle({ account: label, method, params = [] }) {
       return null
     case 'personal_sign':
       return account.signMessage({ message: { raw: params[0] } })
+    case 'eth_signTypedData_v4': {
+      const { domain, types, primaryType, message } = JSON.parse(params[1])
+      delete types.EIP712Domain // viem derives the domain type itself
+      return account.signTypedData({ domain, types, primaryType, message })
+    }
     case 'eth_sendTransaction': {
       const tx = params[0]
       return client.sendTransaction({

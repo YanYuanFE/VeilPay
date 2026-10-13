@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Download, Printer, Save } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatUnits } from 'viem'
@@ -13,30 +13,30 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { downloadCsv, printDocument } from '@/lib/export'
-import { fmtUsdc, parseUsdc, reportError, short } from '@/lib/format'
+import { fmtAmount, parseAmount, reportError, short } from '@/lib/format'
 import { openJson, sealJson, stageText, type Member, type OrgData, type Run, type RunRecord, type SalaryBook } from '@/lib/records'
 import { useSession } from '@/lib/session'
 import { PER_TX, chunkLines, runPayroll, unspentBalance, type PayLine, type Stage } from '@/lib/veilpay/actions'
-import { EXPLORER, USDC_DECIMALS, VAULT } from '@/lib/veilpay/config'
+import { EXPLORER, VAULT, assetOf, type Asset } from '@/lib/veilpay/config'
 import type { Wallet } from '@/lib/veilpay/crypto'
 
 type OpenRun = Run & { record: RunRecord | null }
 type Treasury = { total: bigint; largest: bigint; notes: number }
 
-const usdc = (x: bigint) => formatUnits(x, USDC_DECIMALS)
 const runTotal = (r: RunRecord) => r.lines.reduce((s, l) => s + BigInt(l.amount), 0n)
 const lineTx = (r: RunRecord, i: number) => r.txs[Math.floor(i / PER_TX)] ?? ''
 
 /** Payroll needs a single treasury note that covers the whole run (the circuit spends one note per transaction). */
-function FundingCheck({ need, treasury }: { need: bigint; treasury: Treasury | null }) {
+function FundingCheck({ need, treasury, asset }: { need: bigint; treasury: Treasury | null; asset: Asset }) {
+  const fmt = (x: bigint) => fmtAmount(x, asset)
   if (!treasury || need === 0n || need <= treasury.largest) return null
   return (
     <Alert variant="destructive">
       <AlertTitle>Treasury note too small</AlertTitle>
       <AlertDescription>
-        This run needs one note of at least {fmtUsdc(need)}. Your largest note is {fmtUsdc(treasury.largest)}
-        {treasury.notes > 1 ? ` (${fmtUsdc(treasury.total)} across ${treasury.notes} notes, which can't be combined yet)` : ''}.
-        Deposit at least {fmtUsdc(need)} as a single note in the Treasury tab.
+        This run needs one note of at least {fmt(need)}. Your largest note is {fmt(treasury.largest)}
+        {treasury.notes > 1 ? ` (${fmt(treasury.total)} across ${treasury.notes} notes, which can't be combined yet)` : ''}.
+        Deposit at least {fmt(need)} as a single note in the Treasury tab.
       </AlertDescription>
     </Alert>
   )
@@ -45,10 +45,14 @@ function FundingCheck({ need, treasury }: { need: bigint; treasury: Treasury | n
 export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
   const { client, account } = useSession()
   const orgId = data.org.id
+  const asset = useMemo(() => assetOf(data.org.asset), [data.org.asset])
+  const fmt = (x: bigint) => fmtAmount(x, asset)
+  const parse = (x: string) => parseAmount(x, asset)
+  const units = (x: bigint) => formatUnits(x, asset.decimals)
   const ready = data.members.filter((m) => m.joined_at && m.owner_tag && m.view_pub)
   const [book] = useState<SalaryBook>(() => (data.org.salary_book ? openJson<SalaryBook>(w, data.org.salary_book) : {}))
   const [amounts, setAmounts] = useState<Record<string, string>>(() =>
-    Object.fromEntries(Object.entries(book).map(([id, v]) => [id, usdc(BigInt(v))])))
+    Object.fromEntries(Object.entries(book).map(([id, v]) => [id, units(BigInt(v))])))
   const [memo, setMemo] = useState(() => `${new Date().toISOString().slice(0, 7)} salary`)
   const [bulk, setBulk] = useState('')
   const [bonus, setBonus] = useState({ memberId: '', amount: '', memo: 'Bonus' })
@@ -67,16 +71,16 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
     }))
   }, [orgId, w])
   const loadTreasury = useCallback(async () => {
-    const { notes, total } = await unspentBalance(w)
-    setTreasury({ total, notes: notes.length, largest: notes.reduce((m, n) => (n.amount > m ? n.amount : m), 0n) })
-  }, [w])
+    const { notes, total, largest } = await unspentBalance(w, asset)
+    setTreasury({ total, notes: notes.length, largest })
+  }, [w, asset])
   useEffect(() => { loadRuns().catch(reportError) }, [loadRuns])
   useEffect(() => { loadTreasury().catch(reportError) }, [loadTreasury])
 
   const toLine = (m: Member, amount: bigint, lineMemo: string): PayLine =>
     ({ memberId: m.id, name: m.name, address: { ownerTag: m.owner_tag!, viewPub: m.view_pub! }, amount, memo: lineMemo })
 
-  const lines = (): PayLine[] => ready.filter((m) => amounts[m.id]?.trim()).map((m) => toLine(m, parseUsdc(amounts[m.id]), memo))
+  const lines = (): PayLine[] => ready.filter((m) => amounts[m.id]?.trim()).map((m) => toLine(m, parse(amounts[m.id]), memo))
 
   let preview: { count: number; total: bigint; txs: number; error?: string } = { count: 0, total: 0n, txs: 0 }
   try {
@@ -88,7 +92,7 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
   let bonusAmount = 0n
   let bonusError: string | null = null
   try {
-    if (bonus.amount.trim()) bonusAmount = parseUsdc(bonus.amount)
+    if (bonus.amount.trim()) bonusAmount = parse(bonus.amount)
   } catch (err) {
     bonusError = (err as Error).message
   }
@@ -108,7 +112,7 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
 
   const saveDefaults = async () => {
     try {
-      const next: SalaryBook = Object.fromEntries(ready.filter((m) => amounts[m.id]?.trim()).map((m) => [m.id, parseUsdc(amounts[m.id]).toString()]))
+      const next: SalaryBook = Object.fromEntries(ready.filter((m) => amounts[m.id]?.trim()).map((m) => [m.id, parse(amounts[m.id]).toString()]))
       await api(`/orgs/${orgId}/salary-book`, { method: 'PUT', body: { sealed: sealJson(w, next) } })
       toast.success(`Saved default amounts for ${Object.keys(next).length} member(s)`, { description: 'Encrypted to your key before upload.' })
     } catch (err) {
@@ -120,7 +124,7 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
     const signer = { client: client!, account: account!, onStage: (s: Stage) => setProgress((p) => p && { ...p, stage: stageText[s] }) }
     setProgress({ done: 0, total: chunkLines(payLines).length, stage: 'Scanning treasury…' })
     try {
-      await runPayroll(signer, w, runId, payLines, async (k, n, hash) => {
+      await runPayroll(signer, w, runId, payLines, asset, async (k, n, hash) => {
         record.txs[k] = hash
         setProgress({ done: k + 1, total: n, stage: k + 1 < n ? 'Next batch…' : 'Finishing…' })
         await api(`/orgs/${orgId}/runs/${runId}`, { method: 'PATCH', body: { status: 'running', sealed: sealJson(w, record) } })
@@ -168,16 +172,16 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
 
   const runCsv = (r: OpenRun) => downloadCsv(
     `veilpay-${data.org.name}-${r.created_at.slice(0, 10)}-${r.id.slice(0, 8)}.csv`,
-    [['member', 'amount_usdc', 'memo', 'transaction'], ...r.record!.lines.map((l, i) => [l.name, usdc(BigInt(l.amount)), l.memo, lineTx(r.record!, i)])],
+    [['member', `amount_${asset.symbol.toLowerCase()}`, 'memo', 'transaction'], ...r.record!.lines.map((l, i) => [l.name, units(BigInt(l.amount)), l.memo, lineTx(r.record!, i)])],
     { org: data.org.name, run: r.id, kind: r.record!.kind ?? 'salary', status: r.status, vault: VAULT, generated: new Date().toISOString() },
   ).catch(reportError)
 
   const allCsv = () => {
     const rows = runs.flatMap((r) => (r.record
-      ? r.record.lines.map((l, i) => [r.created_at, r.id, r.record!.kind ?? 'salary', r.status, l.name, usdc(BigInt(l.amount)), l.memo, lineTx(r.record!, i)])
+      ? r.record.lines.map((l, i) => [r.created_at, r.id, r.record!.kind ?? 'salary', r.status, l.name, units(BigInt(l.amount)), l.memo, lineTx(r.record!, i)])
       : []))
     return downloadCsv(`veilpay-${data.org.name}-payroll-history.csv`,
-      [['created_at', 'run', 'kind', 'status', 'member', 'amount_usdc', 'memo', 'transaction'], ...rows],
+      [['created_at', 'run', 'kind', 'status', 'member', `amount_${asset.symbol.toLowerCase()}`, 'memo', 'transaction'], ...rows],
       { org: data.org.name, runs: String(runs.length), vault: VAULT, generated: new Date().toISOString() }).catch(reportError)
   }
 
@@ -187,10 +191,10 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
       printDocument({
         kind: rec.kind === 'bonus' ? 'One-off payment receipt' : 'Payroll receipt',
         title: data.org.name,
-        amount: fmtUsdc(runTotal(rec)),
+        amount: fmt(runTotal(rec)),
         fields: [
           ['Run', r.id], ['Date', new Date(r.created_at).toLocaleString()], ['Status', r.status], ['Recipients', String(rec.lines.length)],
-          ...rec.lines.map((l): [string, string] => [l.name, `${fmtUsdc(BigInt(l.amount))} · ${l.memo}`]),
+          ...rec.lines.map((l): [string, string] => [l.name, `${fmt(BigInt(l.amount))} · ${l.memo}`]),
           ...rec.txs.filter(Boolean).map((h, i): [string, string] => [`Transaction ${i + 1}`, h]),
           ['Vault', `${VAULT} (Arc Testnet)`],
         ],
@@ -233,7 +237,7 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
                 </div>
               </div>
               <Table>
-                <TableHeader><TableRow><TableHead>Member</TableHead><TableHead>Wallet</TableHead><TableHead className="w-48">Amount (USDC)</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Member</TableHead><TableHead>Wallet</TableHead><TableHead className="w-48">Amount ({asset.symbol})</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {ready.map((m) => (
                     <TableRow key={m.id}>
@@ -252,15 +256,15 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
                   <Alert variant="destructive"><AlertDescription>{preview.error}</AlertDescription></Alert>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    {preview.count} recipient(s) · total <span className="num text-foreground">{fmtUsdc(preview.total)}</span> · {preview.txs} transaction(s)
-                    {treasury && <> · treasury <span className="num">{fmtUsdc(treasury.total)}</span></>}
+                    {preview.count} recipient(s) · total <span className="num text-foreground">{fmt(preview.total)}</span> · {preview.txs} transaction(s)
+                    {treasury && <> · treasury <span className="num">{fmt(treasury.total)}</span></>}
                   </p>
                 )}
                 <Button variant="ghost" size="sm" onClick={saveDefaults} disabled={Boolean(preview.error) || preview.count === 0}>
                   <Save /> Save as default amounts
                 </Button>
               </div>
-              <FundingCheck need={preview.total} treasury={treasury} />
+              <FundingCheck need={preview.total} treasury={treasury} asset={asset} />
               {progress ? (
                 <div className="space-y-2">
                   <Progress value={(progress.done / progress.total) * 100} />
@@ -297,7 +301,7 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
                 </select>
               </div>
               <div className="space-y-1">
-                <Label htmlFor="bonus-amount">Amount (USDC)</Label>
+                <Label htmlFor="bonus-amount">Amount ({asset.symbol})</Label>
                 <Input id="bonus-amount" className="num" inputMode="decimal" value={bonus.amount} onChange={(e) => setBonus({ ...bonus, amount: e.target.value })} />
               </div>
               <div className="space-y-1">
@@ -309,7 +313,7 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
               </Button>
             </div>
             {bonusError && <p className="text-sm text-destructive">{bonusError}</p>}
-            <FundingCheck need={bonusAmount} treasury={treasury} />
+            <FundingCheck need={bonusAmount} treasury={treasury} asset={asset} />
           </CardContent>
         </Card>
       )}
@@ -332,7 +336,7 @@ export function Payroll({ data, w }: { data: OrgData; w: Wallet }) {
                     <TableCell className="num text-xs">{new Date(r.created_at).toLocaleString()}</TableCell>
                     <TableCell className="text-muted-foreground">{r.record?.kind === 'bonus' ? 'One-off' : 'Payroll'}</TableCell>
                     <TableCell>{r.recipients}</TableCell>
-                    <TableCell className="num">{r.record ? fmtUsdc(runTotal(r.record)) : 'encrypted'}</TableCell>
+                    <TableCell className="num">{r.record ? fmt(runTotal(r.record)) : 'encrypted'}</TableCell>
                     <TableCell><Badge variant={r.status === 'done' ? 'default' : r.status === 'failed' ? 'destructive' : 'outline'}>{r.status}</Badge></TableCell>
                     <TableCell className="space-x-2">
                       {r.record?.txs.filter(Boolean).map((h) => (

@@ -19,14 +19,15 @@ describe('tamper-evident CSV', () => {
 })
 
 describe('disclosure', () => {
+  const EURC = '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a'
   const domain = 17003763394764819681799826706735782989507548437524573251175545328610202944287n
   const make = (amount: bigint): Disclosure => {
     const w = walletFromSeed(new Uint8Array(32).fill(9)) // after libsodium is ready
     const rho = 424242n
     return {
-      v: 1, chainId: 5042002, vault: '0x99b143A677f49B13053Ec99C5fB16116bf0A49Ff', index: 17, block: '66800015',
-      commitment: noteCommitment(domain, w.ownerTag, amount, rho).toString(), ownerTag: w.ownerTag.toString(),
-      amount: amount.toString(), rho: rho.toString(), memo: '2026-10 salary',
+      v: 2, chainId: 5042002, vault: '0x8BDE9530910d448727f098A8847197146DEbeC5E', index: 17, block: '66920015',
+      commitment: noteCommitment(domain, w.ownerTag, BigInt(EURC), amount, rho).toString(), ownerTag: w.ownerTag.toString(),
+      asset: EURC, amount: amount.toString(), rho: rho.toString(), memo: '2026-10 salary',
     }
   }
   const encode = (d: Disclosure) => btoa(JSON.stringify(d)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -40,6 +41,11 @@ describe('disclosure', () => {
 
   test('an inflated amount no longer matches the on-chain commitment', () => {
     const d = { ...make(3_000_000_000n), amount: '9000000000' }
+    expect(openingMatches(d, domain)).toBe(false)
+  })
+
+  test('relabeling the asset no longer matches', () => {
+    const d = { ...make(3_000_000_000n), asset: '0x3600000000000000000000000000000000000000' }
     expect(openingMatches(d, domain)).toBe(false)
   })
 

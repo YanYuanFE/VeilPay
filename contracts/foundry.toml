@@ -9,4 +9,4 @@ evm_version = "prague"
 optimizer = true
 optimizer_runs = 200
 ffi = true
-fs_permissions = [{ access = "read", path = "../build" }]
+fs_permissions = [{ access = "read", path = "../build" }, { access = "read", path = "./test/fixtures" }]

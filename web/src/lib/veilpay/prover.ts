@@ -1,14 +1,14 @@
-// In-browser Groth16 proving for the transaction circuit (1 input, N_OUTS outputs, depth-20 tree).
+// In-browser Groth16 proving for the transaction circuit (1 input, N_OUTS outputs, depth-20 tree, one asset per transaction).
 import * as snarkjs from 'snarkjs'
 import type { ContractFunctionArgs } from 'viem'
 import { N_OUTS } from './config'
 import { merklePath, noteCommitment, nullifierOf, poseidonOwner } from './crypto'
 import type { vaultAbi } from './vaultAbi'
 
-type TransactInputs = ContractFunctionArgs<typeof vaultAbi, 'nonpayable', 'transact'>
+type TxArgs = ContractFunctionArgs<typeof vaultAbi, 'nonpayable', 'transact'>[0]
 
-const WASM_URL = '/zk/v2/transaction.wasm'
-const ZKEY_URL = '/zk/v2/transaction_final.zkey'
+const WASM_URL = '/zk/v3/transaction.wasm'
+const ZKEY_URL = '/zk/v3/transaction_final.zkey'
 
 export type ProveRequest = {
   domainTag: bigint
@@ -16,6 +16,10 @@ export type ProveRequest = {
   depositAmount: bigint
   withdrawAmount: bigint
   fee: bigint
+  /** Public asset: the notes' asset when value enters or leaves, otherwise 0. */
+  asset: bigint
+  /** Private asset of the input and every output. */
+  noteAsset: bigint
   leaves: bigint[]
   input: { spendSecret: bigint; amount: bigint; rho: bigint; index: number }
   outs: { ownerTag: bigint; amount: bigint; rho: bigint }[]
@@ -25,21 +29,21 @@ export type TransactArgs = {
   proof: { a: [bigint, bigint]; b: [[bigint, bigint], [bigint, bigint]]; c: [bigint, bigint] }
   root: bigint
   nullifier: bigint
-  outCommitments: TransactInputs[3]
+  outCommitments: TxArgs['outCommitments']
 }
 
 export async function prove(req: ProveRequest): Promise<TransactArgs> {
   if (req.outs.length !== N_OUTS) throw new Error(`exactly ${N_OUTS} outputs required`)
-  const inCommitment = noteCommitment(req.domainTag, poseidonOwner(req.input.spendSecret), req.input.amount, req.input.rho)
+  const inCommitment = noteCommitment(req.domainTag, poseidonOwner(req.input.spendSecret), req.noteAsset, req.input.amount, req.input.rho)
   const nullifier = nullifierOf(req.input.spendSecret, inCommitment)
   const { siblings, root } = merklePath(req.leaves, req.input.index)
-  const outCommitments = req.outs.map((o) => noteCommitment(req.domainTag, o.ownerTag, o.amount, o.rho)) as unknown as TransactArgs['outCommitments']
+  const outCommitments = req.outs.map((o) => noteCommitment(req.domainTag, o.ownerTag, req.noteAsset, o.amount, o.rho)) as unknown as TransactArgs['outCommitments']
 
   const s = (x: bigint | number) => x.toString()
   const witness = {
     root: s(root), nullifier: s(nullifier), outCommitment: outCommitments.map(s),
     depositAmount: s(req.depositAmount), withdrawAmount: s(req.withdrawAmount), fee: s(req.fee),
-    extDataHash: s(req.extDataHash), domainTag: s(req.domainTag),
+    asset: s(req.asset), extDataHash: s(req.extDataHash), domainTag: s(req.domainTag), noteAsset: s(req.noteAsset),
     inSpendSecret: s(req.input.spendSecret), inAmount: s(req.input.amount), inRho: s(req.input.rho), inIndex: s(req.input.index),
     inSiblings: siblings.map(s),
     outOwnerTag: req.outs.map((o) => s(o.ownerTag)), outAmount: req.outs.map((o) => s(o.amount)), outRho: req.outs.map((o) => s(o.rho)),

@@ -2,10 +2,10 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { ArrowUpRight, Info, TriangleAlert } from 'lucide-react'
 import { cn } from 'cn'
-import { EXPLORER, VAULT, VAULT_DEPLOY_BLOCK, arcTestnet } from '@/lib/veilpay/config'
+import { EURC, EXPLORER, PERMIT2, USDC, VAULT, VAULT_DEPLOY_BLOCK, arcTestnet } from '@/lib/veilpay/config'
 
-const VERIFIER = '0x16407bCA8d512C0f42Ec28C9FF50eD33C5847CB0'
-const POSEIDON = '0x75e8A8aFF131492125887cd9cB11C894b4271953'
+const VERIFIER = '0x231a8Ab940cdf3d941b23f41f39F11dD579be31E'
+const POSEIDON = '0x05357D9598ff47DEA70B04d4C585AF5BC592F344'
 
 const TOC: { id: string; title: string; children?: { id: string; title: string }[] }[] = [
   { id: 'overview', title: 'Overview' },
@@ -205,8 +205,8 @@ export function DocsPage() {
 
         <Section id="overview" title="Overview">
           <P>
-            VeilPay lets an organization pay its team in USDC on Arc without publishing who earned what.
-            The employer deposits USDC into a vault once; payroll then moves value between encrypted <em>notes</em> inside
+            VeilPay lets an organization pay its team in USDC or EURC on Arc without publishing who earned what. Each
+            organization picks its payroll token when it is created. The employer deposits that token into a vault once; payroll then moves value between encrypted <em>notes</em> inside
             the vault, and each employee withdraws when they choose. A zero-knowledge proof accompanies every vault
             transaction and proves that value is conserved and each note is spent at most once, so the chain can enforce the
             rules without seeing the amounts.
@@ -236,8 +236,8 @@ export function DocsPage() {
           <Sub id="employers" title="Employers">
             <Steps items={[
               <>Open <Link className="underline underline-offset-4" to="/app">the app</Link>, connect your wallet and sign the sign-in message.</>,
-              <>Create an organization. VeilPay asks you to unlock your private keys (the first time, you sign the same message twice); the organization's treasury is owned by these keys.</>,
-              <>In <b>Treasury</b>, deposit USDC. The first deposit also asks for a USDC approval. The deposit amount is public; it becomes one private note.</>,
+              <>Create an organization and choose its payroll token (USDC or EURC); it can't be changed later. VeilPay asks you to unlock your private keys (the first time, you sign the same message twice); the organization's treasury is owned by these keys.</>,
+              <>In <b>Treasury</b>, deposit the organization's token. Each deposit is a single EIP-3009 signature with no approval transaction (tokens without EIP-3009 use Permit2 after a one-time approval). USDC deposits are submitted by the VeilPay relayer, which takes a small fee from the deposit; EURC deposits are sent from your wallet. The deposit amount is public; it becomes one private note.</>,
               <>In <b>Members</b>, paste one person per line as <C>name, email</C> (email optional). Each person gets a private invite link; copy them individually or all at once as CSV.</>,
               <>When people have accepted, open <b>Payroll</b>, enter amounts (or bulk-fill with <C>email or name, amount</C>), set the memo and pay. Up to 15 people are paid per transaction, so N people take ⌈N/15⌉ wallet confirmations.</>,
               <>Use <b>Save as default amounts</b> to prefill the next run, and <b>One-off payment</b> for bonuses or reimbursements.</>,
@@ -256,7 +256,7 @@ export function DocsPage() {
               <>Unlock your keys. They are derived from a wallet signature, so the same wallet recovers them on any device.</>,
               <>Accept the invite. This shares only your payment address (an owner tag and an encryption key), never a key that can spend.</>,
               <>Open <Link className="underline underline-offset-4" to="/me">My pay</Link> to see your private balance and each payment. Amounts are decrypted in your browser.</>,
-              <>To withdraw, choose a payment and an amount. Whatever you don't withdraw stays private as a new note. The withdrawn amount and recipient address become public, so consider withdrawing to a fresh address.</>,
+              <>To withdraw, choose a payment and an amount. Whatever you don't withdraw stays private as a new note. For USDC, the VeilPay relayer submits the withdrawal and pays gas, taking a small fee from the payment, so you need no gas and your wallet is not the on-chain sender. The relayer only takes USDC, so EURC withdrawals are sent from your wallet, which needs a little USDC for gas. The withdrawn amount, token and recipient address become public, so consider withdrawing to a fresh address.</>,
               <>To prove a payment to a landlord or bank, use <b>Share proof</b> and send them the link. Use the printer icon for a payslip and <b>Export</b> for a CSV of all payments.</>,
             ]} />
           </Sub>
@@ -278,7 +278,7 @@ export function DocsPage() {
               Poseidon hash, while the note itself travels encrypted to its owner.
             </P>
             <Pre>{`ownerTag   = Poseidon(spendSecret)
-commitment = Poseidon(domainTag, ownerTag, amount, rho)     amount < 2^64, 6-decimal USDC units
+commitment = Poseidon(domainTag, ownerTag, asset, amount, rho)   asset = token address, amount < 2^64 in its ERC-20 units
 nullifier  = Poseidon(1, spendSecret, commitment)`}</Pre>
             <P>
               <C>rho</C> is a fresh random field element, so two notes with the same owner and amount still have unrelated
@@ -289,15 +289,18 @@ nullifier  = Poseidon(1, spendSecret, commitment)`}</Pre>
           <Sub id="circuit" title="The transaction circuit">
             <P>
               Every vault operation (deposit, payroll, withdrawal) is the same circuit: spend one input note, create sixteen output
-              notes, with public deposit, withdrawal and fee amounts.
+              notes of the same token, with public deposit, withdrawal and fee amounts.
             </P>
             <Pre>{`input.amount + depositAmount = Σ outputs[0..15].amount + withdrawAmount + fee
+input.asset = outputs[i].asset = noteAsset                     one token per transaction
+(depositAmount + withdrawAmount + fee) · (asset − noteAsset) = 0
 all amounts < 2^64`}</Pre>
             <Bullets items={[
               <>A deposit spends a <em>dummy</em> input with amount 0. A zero-amount input skips the Merkle membership check, which is safe because it carries no value.</>,
               <>Unused outputs are zero-value dummies encrypted to throwaway keys, so every transaction has the same shape. The outputs are shuffled so the position of a real payment doesn't leak.</>,
-              <>About 25k constraints; Groth16 on BN254, verified on-chain with Arc's pairing precompiles. Proofs are generated in the browser; on a laptop a whole payroll transaction, including the proof and confirmation, took about 4 seconds.</>,
-              <>Public inputs, in order: <C>root, nullifier, outCommitment[16], depositAmount, withdrawAmount, fee, extDataHash, domainTag</C> (23 in total).</>,
+              <>The public <C>asset</C> must name the notes' token only when value enters or leaves. Payroll transactions move nothing in or out, so they pass zero and the vault rejects anything else: outsiders can't tell which token a payroll moved. A note can't be withdrawn as another token, because its token is inside the commitment.</>,
+              <>About 27k constraints; Groth16 on BN254, verified on-chain with Arc's pairing precompiles. Proofs are generated in the browser; on a laptop a whole payroll transaction, including the proof and confirmation, took about 4 seconds.</>,
+              <>Public inputs, in order: <C>root, nullifier, outCommitment[16], depositAmount, withdrawAmount, fee, asset, extDataHash, domainTag</C> (24 in total).</>,
             ]} />
           </Sub>
 
@@ -316,7 +319,8 @@ all amounts < 2^64`}</Pre>
           <Sub id="binding" title="Binding and replay protection">
             <Bullets items={[
               <><b>External data.</b> The contract hashes the withdrawal recipient, fee recipient and all sixteen ciphertexts into <C>extDataHash</C>, which is a public input. Anyone relaying the transaction cannot change where money goes or swap the ciphertexts without invalidating the proof.</>,
-              <><b>Domain tag.</b> <C>domainTag = keccak256("veilpay.v1", chainId, vault, usdc) mod r</C>, computed by the vault at deployment. Notes and proofs from another chain or another vault do not verify here.</>,
+              <><b>Domain tag.</b> <C>domainTag = keccak256("veilpay.v3", chainId, vault) mod r</C>, computed by the vault at deployment. Notes and proofs from another chain or another vault do not verify here.</>,
+              <><b>Signed deposits.</b> USDC and EURC deposits are authorized by an EIP-3009 <C>ReceiveWithAuthorization</C> signature whose nonce is <C>depositWitness = hash(VeilPayDeposit(uint256[16] outCommitments, uint256 extDataHash))</C>; the token only accepts it from the vault, and only once. Other tokens use a Permit2 <C>PermitWitnessTransferFrom</C> signature with the same witness. Either way, whoever submits it (the relayer, or anyone who sees it in the mempool) can only create exactly the outputs the depositor signed for.</>,
               <><b>Field checks.</b> The verifier rejects any public input at or above the field modulus, so a commitment can't be aliased by adding the modulus.</>,
             ]} />
           </Sub>
@@ -345,7 +349,7 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
             </P>
             <Table
               head={['Field', 'Bytes']}
-              rows={[['version', '1'], ['amount (big-endian)', '8'], ['rho', '32'], ['memo (UTF-8, zero-padded)', '64'], ['sealed-box overhead', '48'], ['ciphertext total', '153']]}
+              rows={[['version', '2'], ['asset (token address)', '20'], ['amount (big-endian)', '8'], ['rho', '32'], ['memo (UTF-8, zero-padded)', '64'], ['sealed-box overhead', '48'], ['ciphertext total', '173']]}
             />
             <P>
               To build a balance, the browser tries to decrypt every event and keeps a note only if re-hashing it with its own
@@ -380,9 +384,9 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
           <Table
             head={['Where', 'What', 'Readable by']}
             rows={[
-              ['Arc (vault)', 'Note commitments, 153-byte encrypted notes, nullifiers, tree roots', 'Everyone sees them; only each owner can read their notes'],
-              ['Arc (vault)', 'Deposit amount and depositor, withdrawal amount and recipient, fees, senders, timing', <b key="p">Public</b>],
-              ['Server', 'Organization names and owner wallets; member names, emails, wallets and payment addresses; invite codes', <span key="s">The VeilPay operator (plaintext today)</span>],
+              ['Arc (vault)', 'Note commitments, 173-byte encrypted notes, nullifiers, tree roots', 'Everyone sees them; only each owner can read their notes'],
+              ['Arc (vault)', 'Deposit and withdrawal amounts, tokens, depositor and recipient; fees, senders, timing', <b key="p">Public</b>],
+              ['Server', 'Organization names, payroll tokens and owner wallets; member names, emails, wallets and payment addresses; invite codes', <span key="s">The VeilPay operator (plaintext today)</span>],
               ['Server', 'Payroll run details and default salaries', 'Only the employer: sealed to their view key in the browser'],
               ['Server', 'Run status, recipient count and timestamps; a cache of public vault events', 'The VeilPay operator'],
               ['Browser', 'Seed and keys, decrypted balances, proofs, verification link contents', 'Only you'],
@@ -390,8 +394,8 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
           />
           <Callout tone="warn" title="What VeilPay does not hide">
             <Bullets items={[
-              'Deposits and withdrawals are ordinary transfers: amounts and addresses are public.',
-              'The server can match run timestamps to on-chain transactions and so knows which transactions are an organization\'s payroll, though not the amounts.',
+              'Deposits and withdrawals are ordinary transfers: amounts, tokens and addresses are public. Payroll transactions hide their token.',
+              'The server can match run timestamps to on-chain transactions and so knows which transactions are an organization\'s payroll and in which token, though not the amounts.',
               'Withdrawing to the wallet you registered lets the server, and anyone who knows that wallet, link the withdrawal to you.',
               'Small teams paid at the same time can be inferred from timing and totals; privacy grows with the number of users.',
               'Encrypted notes stay on-chain forever. If a view key leaks later, that person\'s past payments become readable.',
@@ -401,8 +405,8 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
 
         <Section id="disclosure" title="Verification links" eyebrow="Selective disclosure">
           <P>
-            <b>Share proof</b> builds a link containing one note's opening: index, block, commitment, owner tag, amount, rho and
-            memo. It sits after <C>#</C> in the URL, which browsers never send to a server, so neither VeilPay nor any host sees
+            <b>Share proof</b> builds a link containing one note's opening: index, block, commitment, owner tag, token, amount, rho
+            and memo. It sits after <C>#</C> in the URL, which browsers never send to a server, so neither VeilPay nor any host sees
             it. Nothing is written on-chain.
           </P>
           <Steps items={[
@@ -413,8 +417,8 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
           <Table
             head={['Proves', 'Does not prove']}
             rows={[
-              ['A note with exactly this amount and memo was created in the vault at that block', 'Who paid it; confirm the employer separately'],
-              ['The amount has not been edited (changing it breaks the hash)', 'That the presenter is the recipient; the payer also knows the opening'],
+              ['A note with exactly this token, amount and memo was created in the vault at that block', 'Who paid it; confirm the employer separately'],
+              ['The token and amount have not been edited (changing either breaks the hash)', 'That the presenter is the recipient; the payer also knows the opening'],
               ['The note belongs to this deployment, not another chain or vault', 'That it is still unspent; only the owner\'s key can show that'],
             ]}
           />
@@ -431,15 +435,17 @@ viewKeypair = X25519 from blake2b-256(key = seed, "veilpay.view.v1") decrypts no
               ['VeilPayVault', addr(VAULT)],
               ['TransactionVerifier (Groth16)', addr(VERIFIER)],
               ['Poseidon(2) hasher', addr(POSEIDON)],
-              ['USDC (ERC-20 interface)', addr('0x3600000000000000000000000000000000000000')],
+              ['USDC (ERC-20 interface)', addr(USDC.address)],
+              ['EURC', addr(EURC.address)],
+              ['Permit2', addr(PERMIT2)],
               ['Vault deployment block', <span key="b" className="num">{VAULT_DEPLOY_BLOCK.toLocaleString('en-US')}</span>],
             ]}
           />
           <Bullets items={[
-            'The vault has no owner, no upgrade path, no selfdestruct and no delegatecall. Funds leave only through a verified proof.',
-            'State changes happen before transfers; any failed USDC transfer reverts the whole transaction, including the nullifier.',
-            'Deposits check the vault\'s balance actually increased by the deposit amount. USDC sent to the vault directly is not credited to anyone.',
-            'Measured on Arc Testnet: 1,597,168 gas for a payroll transaction and 1,667,032 for a deposit (which adds the USDC transfer). Most of it is the 31 on-chain Poseidon hashes (about 29k gas each); the rest is Groth16 verification over 23 public inputs, storage and 17 events. A full transaction pays 15 people, so about 107k gas per person.',
+            'The vault has no upgrade path, no selfdestruct and no delegatecall. Funds leave only through a verified proof. Its deployer can add tokens to the allowlist but never remove one, so existing notes always stay withdrawable.',
+            'State changes happen before transfers; any failed token transfer reverts the whole transaction, including the nullifier.',
+            'Deposits check the vault\'s balance actually increased by the deposit amount. Tokens sent to the vault directly are not credited to anyone.',
+            'Measured on Arc Testnet: 1,616,243 gas for a payroll transaction, 1,743,610 for a relayed EIP-3009 deposit and 1,666,922 for a relayed withdrawal. Most of it is the 31 on-chain Poseidon hashes (about 29k gas each); the rest is Groth16 verification over 24 public inputs, storage and 17 events. A full transaction pays 15 people, so about 108k gas per person.',
           ]} />
           <Callout title="Arc specifics">
             Arc's native USDC (18 decimals) and its ERC-20 interface (6 decimals) are one balance. VeilPay uses the 6-decimal

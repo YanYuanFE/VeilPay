@@ -5,7 +5,8 @@ import { LogoMark } from '@/components/Logo'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
-import { fmtUsdc, short } from '@/lib/format'
+import { fmtAmount, short } from '@/lib/format'
+import { assetOf } from '@/lib/veilpay/config'
 import { EXPLORER, VAULT } from '@/lib/veilpay/config'
 import { parseDisclosure, verifyDisclosure, type Disclosure, type Verification } from '@/lib/veilpay/disclosure'
 
@@ -33,7 +34,7 @@ function Result({ d, v }: { d: Disclosure; v: Verification }) {
           <div>
             <p className="eyebrow">{verified ? 'Verified payment' : 'Not verified'}</p>
             <p className={`num mt-3 text-5xl leading-none md:text-6xl ${verified ? 'text-bone' : 'text-bone/40 line-through decoration-seal'}`}>
-              {fmtUsdc(BigInt(d.amount))}
+              {fmtAmount(BigInt(d.amount), assetOf(d.asset))}
             </p>
             <p className="mt-3 text-muted-foreground">
               {d.memo || 'No memo'}{v.timestamp && <> · paid {v.timestamp.toLocaleString()}</>}
@@ -44,7 +45,7 @@ function Result({ d, v }: { d: Disclosure; v: Verification }) {
 
         <ul className="space-y-3 text-sm">
           <Check ok={v.sameVault}>Link is for the VeilPay vault on Arc Testnet ({short(VAULT, 8, 6)})</Check>
-          <Check ok={v.openingMatches}>The amount and memo hash to the stated commitment</Check>
+          <Check ok={v.openingMatches}>The token, amount and memo hash to the stated commitment</Check>
           <Check ok={v.onChain}>That commitment was recorded by the vault in block <span className="num">{Number(d.block).toLocaleString('en-US')}</span> as note #{d.index}</Check>
         </ul>
 

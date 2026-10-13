@@ -6,16 +6,18 @@ import sha3 from "js-sha3";
 const FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 const w = walletFromSeed(Buffer.alloc(32, 7));
 const domainTag = 17003763394764819681799826706735782989507548437524573251175545328610202944287n;
+const asset = 0x89b50855aa3be2f677cd6303cec089b5f319d72an;
 const amount = 123_456_789n, rho = 987654321987654321n;
-const commitment = noteCommitment(domainTag, w.ownerTag, amount, rho);
+const commitment = noteCommitment(domainTag, w.ownerTag, asset, amount, rho);
 const zeroLeaf = BigInt("0x" + sha3.keccak256("veilpay.zero")) % FIELD;
-const note = encryptNote(w.address, amount, "golden memo", rho);
+const note = encryptNote(w.address, asset, amount, "golden memo", rho);
 const out = {
   seedHex: "07".repeat(32),
   spendSecret: w.spendSecret.toString(),
   ownerTag: w.ownerTag.toString(),
   viewPub: w.address.viewPub,
   domainTag: domainTag.toString(),
+  asset: "0x" + asset.toString(16).padStart(40, "0"),
   amount: amount.toString(),
   rho: rho.toString(),
   commitment: commitment.toString(),

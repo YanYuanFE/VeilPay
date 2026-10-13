@@ -13,11 +13,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { downloadCsv, printDocument } from '@/lib/export'
-import { fmtUsdc, parseUsdc, reportError, short } from '@/lib/format'
+import { fmtAmount, parseAmount, reportError, short } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import { myNotes, withdraw, type Stage } from '@/lib/veilpay/actions'
 import { formatUnits } from 'viem'
-import { EXPLORER, VAULT } from '@/lib/veilpay/config'
+import { relayQuote } from '@/lib/veilpay/chain'
+import { stageText } from '@/lib/records'
+import { ASSETS, EXPLORER, USDC, VAULT, assetOf } from '@/lib/veilpay/config'
 import { disclosureFor, disclosureUrl } from '@/lib/veilpay/disclosure'
 import type { Note, Wallet } from '@/lib/veilpay/crypto'
 
@@ -25,18 +27,31 @@ type Row = Note & { spent: boolean }
 
 function WithdrawDialog({ note, w, onClose }: { note: Row; w: Wallet; onClose: (changed: boolean) => void }) {
   const { client, account } = useSession()
-  const [amount, setAmount] = useState(() => formatUnits(note.amount, 6))
+  const asset = assetOf(note.asset)
+  const relayed = asset === USDC // the relayer only takes USDC fees
+  const [quote, setQuote] = useState<{ address: Address; fee: bigint } | null>(null)
+  const [amount, setAmount] = useState(() => (relayed ? '' : formatUnits(note.amount, asset.decimals)))
   const [recipient, setRecipient] = useState<string>(account ?? '')
   const [stage, setStage] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (!relayed) return
+    relayQuote().then((q) => {
+      setQuote(q)
+      if (note.amount > q.fee) setAmount(formatUnits(note.amount - q.fee, asset.decimals))
+    }, reportError)
+  }, [relayed, note.amount, asset.decimals])
+
+  const fee = quote?.fee ?? 0n
+  const max = note.amount > fee ? note.amount - fee : 0n
+
   const submit = async () => {
     try {
+      if (relayed && !quote) throw new Error('relayer quote not loaded')
       if (!isAddress(recipient)) throw new Error('recipient must be a valid address')
-      const value = parseUsdc(amount)
-      const hash = await withdraw(
-        { client: client!, account: account!, onStage: (s: Stage) => setStage(s === 'proving' ? 'Generating proof…' : 'Confirm in your wallet…') },
-        w, note, value, recipient as Address,
-      )
+      const value = parseAmount(amount, asset)
+      const route = relayed ? { relayer: quote! } : { signer: { client: client!, account: account! } }
+      const hash = await withdraw(w, note, value, recipient as Address, route, (s: Stage) => setStage(stageText[s]))
       toast.success('Withdrawal confirmed', { description: hash })
       onClose(true)
     } catch (err) {
@@ -52,12 +67,12 @@ function WithdrawDialog({ note, w, onClose }: { note: Row; w: Wallet; onClose: (
         <DialogHeader>
           <DialogTitle>Withdraw to a wallet</DialogTitle>
           <DialogDescription>
-            The withdrawn amount and recipient become public. Whatever you leave stays private as a new note.
+            The withdrawn amount, token and recipient become public. Whatever you leave stays private as a new note.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1">
-            <Label htmlFor="wd-amount">Amount (max {fmtUsdc(note.amount)})</Label>
+            <Label htmlFor="wd-amount">Amount (max {relayed && !quote ? '…' : fmtAmount(max, asset)})</Label>
             <Input id="wd-amount" value={amount} inputMode="decimal" onChange={(e) => setAmount(e.target.value)} />
           </div>
           <div className="space-y-1">
@@ -65,11 +80,19 @@ function WithdrawDialog({ note, w, onClose }: { note: Row; w: Wallet; onClose: (
             <Input id="wd-to" value={recipient} className="font-mono" onChange={(e) => setRecipient(e.target.value.trim())} />
           </div>
           <p className="text-xs text-muted-foreground">
-            Sending from and to the same wallet that registered your key links that wallet to this payment. Use a fresh address for more privacy.
+            {relayed ? (
+              <>
+                The VeilPay relayer submits the transaction and pays gas, so you need no gas and no sending wallet appears on-chain.
+                Its fee{quote ? <> of <span className="num">{fmtAmount(quote.fee, asset)}</span></> : ''} comes out of this payment.{' '}
+              </>
+            ) : (
+              <>The relayer only handles USDC, so this {asset.symbol} withdrawal is sent from your connected wallet, which pays gas in USDC and becomes the public sender. </>
+            )}
+            Withdrawing to the wallet that registered your key links that wallet to this payment; use a fresh address for more privacy.
           </p>
         </div>
         <DialogFooter>
-          <Button disabled={stage !== null} onClick={submit}>{stage ?? 'Withdraw'}</Button>
+          <Button disabled={stage !== null || (relayed && !quote)} onClick={submit}>{stage ?? 'Withdraw'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -94,7 +117,7 @@ function ShareDialog({ note, w, onClose }: { note: Row; w: Wallet; onClose: () =
         <div className="space-y-3 text-sm">
           <div className="rounded-md border border-hairline bg-ink/60 p-3">
             <p className="eyebrow">Reveals to whoever holds the link</p>
-            <p className="mt-2"><span className="num">{fmtUsdc(note.amount)}</span> · {note.memo || 'no memo'} · block <span className="num">{note.blockNumber.toString()}</span></p>
+            <p className="mt-2"><span className="num">{fmtAmount(note.amount, assetOf(note.asset))}</span> · {note.memo || 'no memo'} · block <span className="num">{note.blockNumber.toString()}</span></p>
           </div>
           <ul className="space-y-1.5 text-muted-foreground">
             <li>· It does not reveal your other payments, your balance or your keys, and cannot be used to spend.</li>
@@ -123,11 +146,11 @@ function MyPayContent({ w }: { w: Wallet }) {
 
   const mismatch = me?.memberships.filter((m) => m.owner_tag && m.owner_tag !== w.ownerTag.toString()) ?? []
   const unspent = rows?.filter((r) => !r.spent) ?? []
-  const total = unspent.reduce((s, r) => s + r.amount, 0n)
+  const totals = ASSETS.map((a) => ({ asset: a, total: unspent.filter((r) => assetOf(r.asset) === a).reduce((s, r) => s + r.amount, 0n) }))
 
   const exportCsv = () => downloadCsv(`veilpay-payments-${new Date().toISOString().slice(0, 10)}.csv`,
-    [['memo', 'amount_usdc', 'block', 'note_index', 'status', 'commitment'],
-      ...(rows ?? []).map((r) => [r.memo, formatUnits(r.amount, 6), r.blockNumber.toString(), String(r.index), r.spent ? 'spent' : 'available', `0x${r.commitment.toString(16).padStart(64, '0')}`])],
+    [['memo', 'amount', 'asset', 'block', 'note_index', 'status', 'commitment'],
+      ...(rows ?? []).map((r) => [r.memo, formatUnits(r.amount, assetOf(r.asset).decimals), assetOf(r.asset).symbol, r.blockNumber.toString(), String(r.index), r.spent ? 'spent' : 'available', `0x${r.commitment.toString(16).padStart(64, '0')}`])],
     { vault: VAULT, generated: new Date().toISOString() }).catch(reportError)
 
   const printPayslip = (r: Row) => {
@@ -135,7 +158,7 @@ function MyPayContent({ w }: { w: Wallet }) {
       printDocument({
         kind: 'Payslip',
         title: r.memo || 'Payment',
-        amount: fmtUsdc(r.amount),
+        amount: fmtAmount(r.amount, assetOf(r.asset)),
         fields: [
           ['Status', r.spent ? 'Withdrawn or moved' : 'Available in vault'],
           ['Block', r.blockNumber.toString()],
@@ -168,7 +191,9 @@ function MyPayContent({ w }: { w: Wallet }) {
           <CardDescription>Decrypted in your browser from public chain data. Nobody else can compute it.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-1">
-          <p className="num text-5xl leading-none text-bone">{rows ? fmtUsdc(total) : '…'}</p>
+          {rows ? totals.map((t) => (
+            <p key={t.asset.symbol} className="num text-4xl leading-none text-bone">{fmtAmount(t.total, t.asset)}</p>
+          )) : <p className="num text-5xl leading-none text-bone">…</p>}
           <Button variant="ghost" size="sm" onClick={() => load().catch(reportError)}><RefreshCw /> Refresh</Button>
         </CardContent>
       </Card>
@@ -188,7 +213,7 @@ function MyPayContent({ w }: { w: Wallet }) {
                 {rows?.map((r) => (
                   <TableRow key={r.index}>
                     <TableCell>{r.memo || '—'}</TableCell>
-                    <TableCell className="num">{fmtUsdc(r.amount)}</TableCell>
+                    <TableCell className="num">{fmtAmount(r.amount, assetOf(r.asset))}</TableCell>
                     <TableCell className="num text-muted-foreground" title={`note #${r.index}`}>{r.blockNumber.toString()} <span className="text-xs">· {short(`0x${r.commitment.toString(16)}`, 6, 4)}</span></TableCell>
                     <TableCell>{r.spent ? <Badge variant="outline">Spent</Badge> : <Badge>Available</Badge>}</TableCell>
                     <TableCell className="whitespace-nowrap text-right">

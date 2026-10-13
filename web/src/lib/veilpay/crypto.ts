@@ -4,26 +4,27 @@
 //   spendSecret = blake2b-512(key=seed, "veilpay.spend.v1") mod r
 //   viewKeypair = X25519 seed keypair from blake2b-256(key=seed, "veilpay.view.v1")
 // Payment address: { ownerTag = Poseidon(spendSecret), viewPub }.
-// Plaintext (105 B): version(1)=1 | amount(8 BE) | rho(32) | memo(64, UTF-8, zero-padded); ciphertext = crypto_box_seal (153 B).
+// Plaintext (125 B): version(1)=2 | asset(20) | amount(8 BE) | rho(32) | memo(64, UTF-8, zero-padded); ciphertext = crypto_box_seal (173 B).
 import sodium from 'libsodium-wrappers'
-import { poseidon1, poseidon2, poseidon3, poseidon4 } from 'poseidon-lite'
-import { bytesToHex, hexToBytes, keccak256, stringToBytes } from 'viem'
+import { poseidon1, poseidon2, poseidon3, poseidon5 } from 'poseidon-lite'
+import { bytesToHex, getAddress, hexToBytes, keccak256, stringToBytes, type Address } from 'viem'
 
 export const FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n
 export const LEVELS = 20
 export const ZERO_LEAF = BigInt(keccak256(stringToBytes('veilpay.zero'))) % FIELD
 
-const VERSION = 1
+const VERSION = 2
 const MEMO_BYTES = 64
-const PLAINTEXT_BYTES = 1 + 8 + 32 + MEMO_BYTES
+const PLAINTEXT_BYTES = 1 + 20 + 8 + 32 + MEMO_BYTES
+const MEMO_AT = 61
 export const CIPHERTEXT_BYTES = PLAINTEXT_BYTES + 48
 
 export const ready = sodium.ready
 
 export const H2 = (a: bigint, b: bigint) => poseidon2([a, b])
 export const poseidonOwner = (spendSecret: bigint) => poseidon1([spendSecret])
-export const noteCommitment = (domainTag: bigint, ownerTag: bigint, amount: bigint, rho: bigint) =>
-  poseidon4([domainTag, ownerTag, amount, rho])
+export const noteCommitment = (domainTag: bigint, ownerTag: bigint, asset: bigint, amount: bigint, rho: bigint) =>
+  poseidon5([domainTag, ownerTag, asset, amount, rho])
 export const nullifierOf = (spendSecret: bigint, commitment: bigint) => poseidon3([1n, spendSecret, commitment])
 
 const toBig = (b: Uint8Array) => (b.length === 0 ? 0n : BigInt(bytesToHex(b)))
@@ -68,25 +69,26 @@ export function seedFromSignature(signature: `0x${string}`): Uint8Array {
   return sodium.crypto_generichash(32, hexToBytes(signature), stringToBytes('veilpay.seed.v1'))
 }
 
-export type OutNote = { ownerTag: bigint; amount: bigint; rho: bigint; ciphertext: `0x${string}` }
+export type OutNote = { ownerTag: bigint; asset: bigint; amount: bigint; rho: bigint; ciphertext: `0x${string}` }
 
-export function encryptNote(address: PaymentAddress, amount: bigint, memo = '', rho = randomField()): OutNote {
+export function encryptNote(address: PaymentAddress, asset: Address, amount: bigint, memo = '', rho = randomField()): OutNote {
   if (amount < 0n || amount >= 1n << 64n) throw new Error('amount out of range')
   const memoBytes = stringToBytes(memo)
   if (memoBytes.length > MEMO_BYTES) throw new Error(`memo exceeds ${MEMO_BYTES} bytes`)
   const pt = new Uint8Array(PLAINTEXT_BYTES)
   pt[0] = VERSION
-  pt.set(toBytes(amount, 8), 1)
-  pt.set(toBytes(rho, 32), 9)
-  pt.set(memoBytes, 41)
+  pt.set(hexToBytes(asset), 1)
+  pt.set(toBytes(amount, 8), 21)
+  pt.set(toBytes(rho, 32), 29)
+  pt.set(memoBytes, MEMO_AT)
   const ct = sodium.crypto_box_seal(pt, sodium.from_hex(address.viewPub))
-  return { ownerTag: BigInt(address.ownerTag), amount, rho, ciphertext: bytesToHex(ct) }
+  return { ownerTag: BigInt(address.ownerTag), asset: BigInt(asset), amount, rho, ciphertext: bytesToHex(ct) }
 }
 
-/** Zero-value output owned by nobody, same size as a real one. */
-export function dummyNote(): OutNote {
+/** Zero-value output owned by nobody, same size as a real one; `asset` must be the transaction's. */
+export function dummyNote(asset: Address): OutNote {
   const k = sodium.crypto_box_keypair()
-  return encryptNote({ ownerTag: randomField().toString(), viewPub: sodium.to_hex(k.publicKey) }, 0n)
+  return encryptNote({ ownerTag: randomField().toString(), viewPub: sodium.to_hex(k.publicKey) }, asset, 0n)
 }
 
 /** Seals arbitrary bytes to a view key; used for the employer's own encrypted payroll records. */
@@ -104,13 +106,17 @@ function tryDecrypt(w: Wallet, ciphertext: `0x${string}`) {
   }
   if (pt.length !== PLAINTEXT_BYTES || pt[0] !== VERSION) return null
   let end = PLAINTEXT_BYTES
-  while (end > 41 && pt[end - 1] === 0) end--
-  return { amount: toBig(pt.subarray(1, 9)), rho: toBig(pt.subarray(9, 41)), memo: new TextDecoder().decode(pt.subarray(41, end)) }
+  while (end > MEMO_AT && pt[end - 1] === 0) end--
+  return {
+    asset: getAddress(bytesToHex(pt.subarray(1, 21))), amount: toBig(pt.subarray(21, 29)), rho: toBig(pt.subarray(29, MEMO_AT)),
+    memo: new TextDecoder().decode(pt.subarray(MEMO_AT, end)),
+  }
 }
 
 export type ChainEvent = { commitment: bigint; index: number; ciphertext: `0x${string}`; blockNumber: bigint }
 
 export type Note = {
+  asset: Address
   amount: bigint
   rho: bigint
   memo: string
@@ -129,7 +135,7 @@ export function scan(w: Wallet, domainTag: bigint, events: ChainEvent[]): Note[]
   for (const ev of events) {
     const n = tryDecrypt(w, ev.ciphertext)
     if (!n) continue
-    const commitment = noteCommitment(domainTag, w.ownerTag, n.amount, n.rho)
+    const commitment = noteCommitment(domainTag, w.ownerTag, BigInt(n.asset), n.amount, n.rho)
     if (commitment !== ev.commitment) continue
     notes.push({ ...n, index: ev.index, commitment, nullifier: nullifierOf(w.spendSecret, commitment), blockNumber: ev.blockNumber })
   }

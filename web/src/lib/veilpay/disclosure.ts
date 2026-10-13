@@ -1,7 +1,7 @@
 // Targeted, off-chain disclosure of one note. The employee hands a verifier the note opening; the verifier
 // re-hashes it and checks the commitment against the vault's own NewCommitment log on Arc. Nothing is published.
 //
-// What a valid disclosure proves: a note with exactly this amount and memo was created in the vault at that block.
+// What a valid disclosure proves: a note with exactly this asset, amount and memo was created in the vault at that block.
 // What it does not prove: who issued it, that the presenter owns it (the payer also knows the opening), or whether
 // it has been withdrawn since (that needs the owner's spend secret).
 import { parseAbiItem } from 'viem'
@@ -10,13 +10,14 @@ import { arcTestnet, VAULT } from './config'
 import { FIELD, noteCommitment, type Note, type Wallet } from './crypto'
 
 export type Disclosure = {
-  v: 1
+  v: 2
   chainId: number
   vault: string
   index: number
   block: string
   commitment: string
   ownerTag: string
+  asset: string
   amount: string
   rho: string
   memo: string
@@ -24,8 +25,8 @@ export type Disclosure = {
 
 export function disclosureFor(w: Wallet, n: Note): Disclosure {
   return {
-    v: 1, chainId: arcTestnet.id, vault: VAULT, index: n.index, block: n.blockNumber.toString(),
-    commitment: n.commitment.toString(), ownerTag: w.ownerTag.toString(), amount: n.amount.toString(), rho: n.rho.toString(), memo: n.memo,
+    v: 2, chainId: arcTestnet.id, vault: VAULT, index: n.index, block: n.blockNumber.toString(),
+    commitment: n.commitment.toString(), ownerTag: w.ownerTag.toString(), asset: n.asset, amount: n.amount.toString(), rho: n.rho.toString(), memo: n.memo,
   }
 }
 
@@ -46,9 +47,10 @@ export function parseDisclosure(input: string): Disclosure {
   } catch {
     throw new Error('not a VeilPay disclosure link')
   }
-  if (d.v !== 1) throw new Error('unsupported disclosure version')
+  if (d.v !== 2) throw new Error('unsupported disclosure version')
   if (!Number.isInteger(d.chainId) || !Number.isInteger(d.index) || (d.index as number) < 0) throw new Error('malformed chain id or index')
   if (typeof d.vault !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(d.vault)) throw new Error('malformed vault address')
+  if (typeof d.asset !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(d.asset)) throw new Error('malformed asset')
   for (const k of ['commitment', 'ownerTag', 'rho'] as const) if (!isDec(d[k], FIELD)) throw new Error(`malformed ${k}`)
   if (!isDec(d.amount, 1n << 64n)) throw new Error('malformed amount')
   if (!isDec(d.block, 1n << 64n)) throw new Error('malformed block')
@@ -58,7 +60,7 @@ export function parseDisclosure(input: string): Disclosure {
 
 /** Pure check: does the opening hash to the stated commitment under this vault's domain? */
 export const openingMatches = (d: Disclosure, domainTag: bigint) =>
-  noteCommitment(domainTag, BigInt(d.ownerTag), BigInt(d.amount), BigInt(d.rho)) === BigInt(d.commitment)
+  noteCommitment(domainTag, BigInt(d.ownerTag), BigInt(d.asset), BigInt(d.amount), BigInt(d.rho)) === BigInt(d.commitment)
 
 export type Verification = {
   sameVault: boolean

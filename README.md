@@ -1,82 +1,103 @@
 # VeilPay
 
-VeilPay 是面向 Arc 的隐私薪资项目，目标是在 USDC 资金池内部隐藏员工的工资分配和余额，并提供可验证的资金守恒与赎回流程。
+VeilPay is a private payroll project for Arc. It hides employee salary allocations and balances inside a multi-asset pool (USDC and EURC on Arc) while keeping fund conservation and redemption verifiable.
 
-当前状态：G0 验真已完成；交易电路和金库合约已部署到 Arc 测试网，入金、私密发薪、提现与重复花费拒绝在链上跑通。凭证加密与员工端扫描解密已完成并在测试网验证。`web/` 是独立的前端与后端项目，支持创建组织、批量邀请成员、批量发薪和员工提现，已在本地对接 Arc 测试网完成端到端验证，尚未部署到 Vercel。尚无中继服务。
+Status: G0 verification is done. The transaction circuit and vault contract are deployed on Arc testnet, and deposits, private payroll, withdrawals, and double-spend rejection all work on-chain. Note encryption and employee-side scanning/decryption are done and verified on testnet. `web/` is a standalone frontend + backend project that supports creating organizations, bulk-inviting members, batch payroll, and employee withdrawals. It has been verified end to end locally against Arc testnet but is not yet deployed to Vercel. Each organization picks its payroll token (USDC or EURC) at creation. Deposits are authorized by a single signature: EIP-3009 `receiveWithAuthorization` for USDC and EURC (no approval transaction at all), Permit2 for other tokens. USDC deposits and withdrawals go through a relayer endpoint in the same backend, so users need no gas and are not the on-chain sender; EURC transactions are sent from the user's wallet because the relayer only takes USDC fees.
 
-## 代码结构
+## Code layout
 
-- `web/`：Vite + React + shadcn/ui 前端，后端为 Vercel Function + Postgres。证明在浏览器内生成；后端只保存组织、成员名单、收款地址，以及用雇主查看密钥封装的发薪记录。详见 [web/README.md](web/README.md)。
+- `web/`: Vite + React + shadcn/ui frontend, with a Vercel Function + Postgres backend. Proofs are generated in the browser; the backend only stores organizations, member lists, payout addresses, and payroll records sealed with the employer's viewing key. See [web/README.md](web/README.md).
+- `circuits/transaction.circom`: unified transaction circuit. 1 input note and 16 output notes (up to 15 payees per transaction plus 1 change note), with public deposit, withdrawal, and fee amounts; deposits use a zero-value dummy input note. Every note commits to its token; one transaction moves one token, which is public only when value enters or leaves, so payroll transactions hide it. About 26.9k constraints, 24 public inputs.
+- `contracts/src/VeilPayVault.sol`: non-upgradeable multi-asset vault. Depth-20 Poseidon commitment tree (each transaction inserts a 16-leaf subtree), 32 historical roots, a nullifier set, an `extDataHash` binding the recipient, fee recipient, and ciphertexts, an add-only token allowlist, `transactWithAuthorization` for EIP-3009 deposits, and `transactWithPermit2` for Permit2 deposits. Both bind the signature to `depositWitness(outCommitments, extDataHash)` (the EIP-3009 nonce or the Permit2 witness), so a submitter cannot redirect the funds.
+- `contracts/src/TransactionVerifier.sol`: Groth16 verifier exported by `scripts/build_circuit.sh`.
+- `prover/prove.mjs`: generates transaction proofs locally and rebuilds Merkle paths.
+- `contracts/test/VeilPayVault.t.sol`: 25 tests that call the real prover via ffi. Covers deposits, private payroll, relayed withdrawals, double spends, tampered recipient/fee/ciphertext/amount, cross-vault replay, unknown roots, atomic rollback for blocklisted addresses, unauthorized deposits, inflation, and spending someone else's note; plus separate per-token ledgers, withdrawing a note as another token, unlisted tokens, hidden payroll tokens, the add-only allowlist, Permit2 deposits (relayed, front-run with a stolen signature, no deposit), and EIP-3009 deposits (no approval, stolen signature, single-use authorization, no deposit) against a mock with FiatToken's checks. Permit2 runs from its Arc testnet bytecode (`test/fixtures/permit2.hex`).
+- `contracts/script/Deploy.s.sol`: deploys the Poseidon hasher, verifier, and vault.
+- `prover/wallet.mjs`: wallet. Derives the spending secret and X25519 viewing key from a 32-byte seed; encrypts notes with libsodium sealed boxes (fixed 173-byte ciphertext that includes the token); scans on-chain events, decrypts, and checks commitments. `prover/wallet.test.mjs` has 9 tests (`node --test prover/*.test.mjs`).
+- `prover/testnet_flow.mjs`: drives the full testnet flow with cast; rebuilds the commitment tree from `NewCommitment` events, with USDC transfers executed for real on an Arc node.
 
-- `circuits/transaction.circom`：统一交易电路。1 个输入凭证、16 个输出凭证（每笔最多发 15 人，另 1 份为找零），公开入金、提现与手续费金额；入金时输入为零金额占位凭证。约 25.2k 约束，23 个公开输入。
-- `contracts/src/VeilPayVault.sol`：不可升级的 USDC 金库。深度 20 的 Poseidon 承诺树（每笔交易插入 16 叶子子树）、32 个历史根、nullifier 集合，以及绑定收款人、手续费接收者和密文的 `extDataHash`。
-- `contracts/src/TransactionVerifier.sol`：由 `scripts/build_circuit.sh` 导出的 Groth16 verifier。
-- `prover/prove.mjs`：本地生成交易证明，并重建 Merkle 路径。
-- `contracts/test/VeilPayVault.t.sol`：11 个测试，通过 ffi 调用真实 prover。覆盖充值、私密发薪、经中继提现、重复花费、篡改收款人/手续费/密文/金额、跨金库重放、未知根、被封禁地址的原子回滚、无授权入金、增发与盗用他人凭证。
-- `contracts/script/Deploy.s.sol`：部署 Poseidon 哈希合约、verifier 和金库。
-- `prover/wallet.mjs`：钱包。从 32 字节种子派生花费秘密和 X25519 查看密钥；用 libsodium sealed box 加密凭证（密文固定 153 字节）；扫描链上事件、解密并核对承诺。`prover/wallet.test.mjs` 有 8 个测试（`node --test prover/*.test.mjs`）。
-- `prover/testnet_flow.mjs`：用 cast 驱动测试网完整流程；从 `NewCommitment` 事件重建承诺树，USDC 转账在 Arc 节点上真实执行。
-
-## 构建与测试
+## Build and test
 
 ```bash
 npm ci
-./scripts/build_circuit.sh          # 编译电路、本地单方初始化、导出 verifier
+./scripts/build_circuit.sh          # compile circuit, single-party local setup, export verifier
 (cd contracts && forge test)
 ```
 
-## 部署到 Arc 测试网
+## Deploy to Arc testnet
 
-在 `contracts/.env` 写入 `PRIVATE_KEY=0x...`（仅使用测试网专用账户，至少需要约 1 USDC 加 gas）：
+Put `PRIVATE_KEY=0x...` in `contracts/.env` (forge needs the `0x` prefix) (use a testnet-only account with at least ~1 USDC plus gas):
 
 ```bash
 cd contracts && forge script script/Deploy.s.sol --rpc-url https://rpc.testnet.arc.io --broadcast && cd ..
 PRIVATE_KEY=0x... node prover/testnet_flow.mjs <vault> <deployBlock> research/<report>.json
 ```
 
-`forge script` 在本地 EVM 预先模拟，无法执行 Arc USDC 依赖的预编译，所以 USDC 流程用 cast 直接发交易。
+`forge script` simulates on a local EVM first and cannot execute the precompile Arc USDC relies on, so the USDC flow sends transactions directly with cast.
 
-### 当前测试网部署（v2，16 输出，2026-10-12）
+### Current testnet deployment (v4, EIP-3009 deposits, 2026-10-13)
 
-| 合约 | 地址 |
+| Contract | Address |
 | --- | --- |
-| VeilPayVault | `0x206b534BF9025AFc7B31f18639aE5DeA07dbf5Bb`（区块 66832820） |
+| VeilPayVault | `0x4eAC336a5d9ed20125180368888bfcc07DB1D2b3` (block 66924551) |
+| TransactionVerifier | `0x231a8Ab940cdf3d941b23f41f39F11dD579be31E` |
+| Poseidon(2) | `0x05357D9598ff47DEA70B04d4C585AF5BC592F344` |
+
+Same circuit, proving key and note format as v3; v4 adds `transactWithAuthorization`. Arc testnet USDC and EURC both expose `receiveWithAuthorization` with the standard EIP-712 domain (name `USDC` / `EURC`, version `2`). Browser end-to-end check with a freshly funded employer account: a relayed EIP-3009 deposit of 0.5 USDC (1,743,610 gas, 0.05 USDC fee), after which the employer's account nonce was still 0 and it had no allowance to the vault or Permit2, so depositing required no transaction from the employer at all.
+
+### 2026-10-13 testnet deployment (v3, multi-asset, retired)
+
+| Contract | Address |
+| --- | --- |
+| VeilPayVault | `0x8BDE9530910d448727f098A8847197146DEbeC5E` (block 66918735) |
+| TransactionVerifier | `0x5Da53d26627a2EC7900DfD06f2B05506b081930a` |
+| Poseidon(2) | `0xf8B1FeF6e3D12BffDa4b60215E9290A297cBD50a` |
+
+Allowlist: USDC `0x3600000000000000000000000000000000000000`, EURC `0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a`. Permit2: `0x000000000022D473030F116dDEE9F6B43aC78BA3`.
+
+[v3 flow report](research/arc-vault-v3-testnet-flow-2026-10-13.json): the same deposit, payroll, withdrawal, visibility and double-spend checks as v1, all passing (1,650,835 / 1,622,924 / 1,668,323 gas). Browser end-to-end check on a USDC organization: a Permit2 deposit submitted by the relayer (1,749,426 gas, 0.05 USDC fee), private payroll whose transaction carries `asset = 0` and no token transfers (1,616,243 gas), a relayed withdrawal (1,666,922 gas), and a verification link checked against the vault. The EURC path is covered by the contract tests; it has not been run on testnet because the test accounts hold no EURC. The frontend only targets the current deployment; testnet balances in earlier vaults stay in those contracts. The user key-derivation message is frozen at the v1 text, so switching vaults does not change registered payout addresses.
+
+### 2026-10-12 testnet deployment (v2, 16 outputs, retired)
+
+| Contract | Address |
+| --- | --- |
+| VeilPayVault | `0x206b534BF9025AFc7B31f18639aE5DeA07dbf5Bb` (block 66832820) |
 | TransactionVerifier | `0x16407bCA8d512C0f42Ec28C9FF50eD33C5847CB0` |
 | Poseidon(2) | `0x75e8A8aFF131492125887cd9cB11C894b4271953` |
 
-浏览器端到端验证：入金 1 USDC（1,667,032 gas），一笔交易给 4 人私密发薪（1,597,168 gas，16 个输出），员工扫描后部分提现。每笔满载可发 15 人，约 10.7 万 gas/人。前端只对接 v2；v1 金库中的测试网余额保留在原合约内，未迁移。用户密钥派生消息冻结在 v1 文本，换金库不改变已注册的收款地址。
+Browser end-to-end check: deposit 1 USDC (1,667,032 gas), private payroll to 4 people in one transaction (1,597,168 gas, 16 outputs), then an employee scans and makes a partial withdrawal. A full transaction pays 15 people, about 107k gas per person.
 
-### 2026-10-12 测试网部署（v1，4 输出，已停用）
+### 2026-10-12 testnet deployment (v1, 4 outputs, retired)
 
-| 合约 | 地址 |
+| Contract | Address |
 | --- | --- |
-| VeilPayVault | `0x99b143A677f49B13053Ec99C5fB16116bf0A49Ff`（区块 66795653） |
+| VeilPayVault | `0x99b143A677f49B13053Ec99C5fB16116bf0A49Ff` (block 66795653) |
 | TransactionVerifier | `0xeaA45532F03CE35c0F816F8AC01aAF86dE669257` |
 | Poseidon(2) | `0xD87d10cc49c3d04DaC256b533F95547017204e16` |
 
-[流程报告](research/arc-vault-testnet-flow-2026-10-12.json)：入金 1 USDC（1,189,073 gas），私密发薪 0.2/0.3/0.4 加 0.1 找零（1,119,221 gas），提现 0.15 并支付 0.01 手续费、找零 0.14（1,192,206 gas）。重放已花费凭证被节点以 `nullifier spent` 拒绝；金库余额 0.84 USDC，与账本一致。
+[Flow report](research/arc-vault-testnet-flow-2026-10-12.json): deposit 1 USDC (1,189,073 gas); private payroll of 0.2/0.3/0.4 plus 0.1 change (1,119,221 gas); withdraw 0.15 with a 0.01 fee, leaving 0.14 change (1,192,206 gas). Replaying a spent note was rejected by the node with `nullifier spent`; the vault balance of 0.84 USDC matches the ledger.
 
-[加密流程报告](research/arc-vault-testnet-encrypted-flow-2026-10-12.json)：同一金库上使用真实密文再跑一遍。各方扫描链上事件后，雇主只看到 0.1 找零，Alice、Bob、Carol 分别只看到 0.2、0.3、0.4，局外钱包看不到任何凭证；Bob 仅凭种子重建出提现后的 0.14 余额。发薪交易的 calldata 中没有明文金额和备注。
+[Encrypted flow report](research/arc-vault-testnet-encrypted-flow-2026-10-12.json): the same flow rerun on the same vault with real ciphertexts. After each party scans on-chain events, the employer sees only the 0.1 change, Alice, Bob, and Carol see only 0.2, 0.3, and 0.4 respectively, and an outside wallet sees no notes at all; Bob rebuilds his post-withdrawal 0.14 balance from his seed alone. The payroll transaction calldata contains no plaintext amounts or memos.
 
-单笔 `transact` 本地约 1.12–1.20M gas，其中约 21 次链上 Poseidon 调用占大头。原型的 Groth16 初始化只有一方参与，仅限测试，不可承载真实资金。
+A single `transact` costs about 1.12–1.20M gas locally, dominated by ~21 on-chain Poseidon calls. The prototype's Groth16 setup has a single participant and is for testing only; it must not hold real funds.
 
-## 文档
+## Docs
 
-- 产品与协议文档：应用内 `/docs` 页面（源码 `web/src/pages/Docs.tsx`），涵盖使用指南、协议设计、隐私模型、合约地址与 API。
-- [2026 年 10 月 12 日主网配对测试记录](research/arc-bn254-check-2026-10-12.json)：两个 Arc 主网 RPC 的非空 BN254 pairing 正反向测试。
-- [包含完整向量的复现结果](research/arc-bn254-reproduction-2026-10-12.json)：点加法、标量乘法和配对校验在两个主网 RPC 上均通过。
-- G0 Groth16 验真：早期用最小 Poseidon 承诺电路验证 Arc 能运行 snarkjs 导出的 verifier。实验代码已移除，结果保留在下方报告中。
-- [G0 测试网结果](research/arc-g0-groth16-testnet-2026-10-12.json)、[G0 主网结果](research/arc-g0-groth16-mainnet-2026-10-12.json)：有效证明通过，5 种篡改均被拒绝，单次验证约 200,812 gas。
-- [预编译检查脚本](scripts/check_arc_bn254.py)：只读检查点加法、标量乘法与配对预编译，不发送交易或使用钱包。
+- Product and protocol docs: the in-app `/docs` page (source: `web/src/pages/Docs.tsx`), covering the user guide, protocol design, privacy model, contract addresses, and API.
+- [2026-10-12 mainnet pairing check](research/arc-bn254-check-2026-10-12.json): non-trivial BN254 pairing positive and negative tests against two Arc mainnet RPCs.
+- [Reproduction with full vectors](research/arc-bn254-reproduction-2026-10-12.json): point addition, scalar multiplication, and pairing checks all pass on both mainnet RPCs.
+- G0 Groth16 verification: an early minimal Poseidon commitment circuit confirmed that Arc can run a snarkjs-exported verifier. The experiment code has been removed; results are kept in the reports below.
+- [G0 testnet results](research/arc-g0-groth16-testnet-2026-10-12.json), [G0 mainnet results](research/arc-g0-groth16-mainnet-2026-10-12.json): valid proofs pass, all 5 tampering cases are rejected, about 200,812 gas per verification.
+- [Precompile check script](scripts/check_arc_bn254.py): read-only checks of the point addition, scalar multiplication, and pairing precompiles; sends no transactions and uses no wallet.
 
-## 复现基础兼容性检查
+## Reproduce the basic compatibility check
 
-脚本只使用 Python 标准库。运行环境需要能够访问 Arc 公共 RPC。
+The script uses only the Python standard library and needs access to Arc's public RPC.
 
 ```bash
 python3 scripts/check_arc_bn254.py --network mainnet --output /tmp/veilpay-bn254-check.json
 ```
 
-检查测试网时使用 `--network testnet`。返回非零退出码表示出现网络错误或某个测试结果不匹配，不能仅据此断言链不支持该功能。
+Use `--network testnet` to check testnet. A non-zero exit code means a network error or a mismatched test result; it alone does not prove the chain lacks the feature.
 
-预编译检查通过只说明基础运算可用，不能代替真实 Groth16 验证合约、薪资电路和资金流程的测试。
+Passing the precompile check only shows the basic operations work. It does not replace testing the real Groth16 verifier contract, the payroll circuit, and the fund flow.

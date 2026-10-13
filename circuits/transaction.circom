@@ -28,10 +28,11 @@ template MerkleRoot(levels) {
     root <== cur[levels];
 }
 
-// commitment = Poseidon(domainTag, ownerTag, amount, rho), amount < 2^64.
+// commitment = Poseidon(domainTag, ownerTag, asset, amount, rho), amount < 2^64.
 template NoteCommitment() {
     signal input domainTag;
     signal input ownerTag;
+    signal input asset;
     signal input amount;
     signal input rho;
     signal output commitment;
@@ -39,17 +40,19 @@ template NoteCommitment() {
     component range = Num2Bits(64);
     range.in <== amount;
 
-    component h = Poseidon(4);
+    component h = Poseidon(5);
     h.inputs[0] <== domainTag;
     h.inputs[1] <== ownerTag;
-    h.inputs[2] <== amount;
-    h.inputs[3] <== rho;
+    h.inputs[2] <== asset;
+    h.inputs[3] <== amount;
+    h.inputs[4] <== rho;
     commitment <== h.out;
 }
 
-// Spend one note, create nOuts notes:
+// Spend one note, create nOuts notes, all of one asset (noteAsset):
 //   inAmount + depositAmount == sum(outAmount) + withdrawAmount + fee
 // A zero-amount input is a dummy (used for deposits) and skips the Merkle check.
+// The public asset must equal noteAsset only when value enters or leaves; internal transfers keep it hidden.
 template Transaction(levels, nOuts) {
     // public
     signal input root;
@@ -58,10 +61,12 @@ template Transaction(levels, nOuts) {
     signal input depositAmount;
     signal input withdrawAmount;
     signal input fee;
+    signal input asset;
     signal input extDataHash;
     signal input domainTag;
 
     // private
+    signal input noteAsset;
     signal input inSpendSecret;
     signal input inAmount;
     signal input inRho;
@@ -78,6 +83,7 @@ template Transaction(levels, nOuts) {
     component inNote = NoteCommitment();
     inNote.domainTag <== domainTag;
     inNote.ownerTag <== owner.out;
+    inNote.asset <== noteAsset;
     inNote.amount <== inAmount;
     inNote.rho <== inRho;
 
@@ -104,6 +110,7 @@ template Transaction(levels, nOuts) {
         outNote[i] = NoteCommitment();
         outNote[i].domainTag <== domainTag;
         outNote[i].ownerTag <== outOwnerTag[i];
+        outNote[i].asset <== noteAsset;
         outNote[i].amount <== outAmount[i];
         outNote[i].rho <== outRho[i];
         outCommitment[i] === outNote[i].commitment;
@@ -120,8 +127,11 @@ template Transaction(levels, nOuts) {
 
     inAmount + depositAmount === outSum + withdrawAmount + fee;
 
+    // public value movement must name the notes' asset
+    (depositAmount + withdrawAmount + fee) * (asset - noteAsset) === 0;
+
     // bind extDataHash into the constraint system
     signal extDataSquare <== extDataHash * extDataHash;
 }
 
-component main {public [root, nullifier, outCommitment, depositAmount, withdrawAmount, fee, extDataHash, domainTag]} = Transaction(20, 16);
+component main {public [root, nullifier, outCommitment, depositAmount, withdrawAmount, fee, asset, extDataHash, domainTag]} = Transaction(20, 16);

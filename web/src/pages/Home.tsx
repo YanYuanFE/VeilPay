@@ -11,17 +11,19 @@ import { SignInButton } from '@/components/Unlock'
 import { api } from '@/lib/api'
 import { reportError } from '@/lib/format'
 import { useSession } from '@/lib/session'
+import { ASSETS, USDC, assetOf } from '@/lib/veilpay/config'
 
 function CreateOrg() {
   const { unlock, refresh } = useSession()
   const navigate = useNavigate()
   const [name, setName] = useState('')
+  const [asset, setAsset] = useState(USDC)
   const [busy, setBusy] = useState(false)
   const submit = async () => {
     setBusy(true)
     try {
       const w = await unlock() // the org treasury is owned by this wallet's VeilPay key
-      const org = await api<{ id: string }>('/orgs', { method: 'POST', body: { name, ...w.address } })
+      const org = await api<{ id: string }>('/orgs', { method: 'POST', body: { name, asset: asset.address, ...w.address } })
       await refresh()
       navigate(`/orgs/${org.id}`)
     } catch (err) {
@@ -41,6 +43,14 @@ function CreateOrg() {
         <div className="space-y-2">
           <Label htmlFor="org-name">Name</Label>
           <Input id="org-name" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="Acme Labs" />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="org-asset">Payroll token</Label>
+          <select id="org-asset" value={asset.symbol} onChange={(e) => setAsset(ASSETS.find((a) => a.symbol === e.target.value)!)}
+            className="h-10 w-full rounded-lg border border-input bg-transparent px-3 text-sm dark:bg-input/30">
+            {ASSETS.map((a) => <option key={a.symbol} value={a.symbol}>{a.symbol}</option>)}
+          </select>
+          <p className="text-xs text-muted-foreground">The treasury and every payment use this token. It can't be changed later.</p>
         </div>
         <DialogFooter>
           <Button disabled={busy || !name.trim()} onClick={submit}>{busy ? 'Creating…' : 'Create'}</Button>
@@ -84,7 +94,7 @@ export function Home() {
                 <LogoMark className="absolute left-1/2 top-[3.4rem] size-8 -translate-x-1/2 -translate-y-1/2 transition-transform duration-500 group-hover:rotate-[18deg]" />
                 <div className="absolute inset-x-6 bottom-5 flex items-end justify-between gap-4">
                   <h2 className="truncate text-2xl">{o.name}</h2>
-                  <span className="num shrink-0 text-xs text-muted-foreground">{new Date(o.created_at).toLocaleDateString('en-CA')}</span>
+                  <span className="num shrink-0 text-xs text-muted-foreground">{assetOf(o.asset).symbol} · {new Date(o.created_at).toLocaleDateString('en-CA')}</span>
                 </div>
               </article>
             </Link>

@@ -1,6 +1,6 @@
 # VeilPay Web
 
-Private USDC payroll on Arc Testnet: organizations, bulk invites, bulk payroll, and employee withdrawals.
+Private payroll on Arc Testnet in USDC or EURC (chosen per organization at creation): organizations, bulk invites, bulk payroll, and employee withdrawals.
 User and protocol documentation lives in the app at `/docs` (`src/pages/Docs.tsx`).
 Vite + React + shadcn/ui frontend with RainbowKit (wagmi 2) wallet connection, one Vercel Function (`api/index.ts`) backed by Postgres (Neon in production).
 
@@ -9,7 +9,7 @@ Vite + React + shadcn/ui frontend with RainbowKit (wagmi 2) wallet connection, o
 | Data | Location |
 | --- | --- |
 | Spend secret, view key, seed | Browser only (derived from a wallet signature, cached in `sessionStorage`) |
-| Proof generation | Browser (`snarkjs`, artifacts in `public/zk/v1/`) |
+| Proof generation | Browser (`snarkjs`, artifacts in `public/zk/v3/`) |
 | Orgs, member names/emails, invite codes, payment addresses (`ownerTag`, `viewPub`) | Postgres |
 | Payroll run details (who got how much) | Postgres, **sealed to the employer's view key in the browser**; the server sees ciphertext |
 | Commitments, ciphertexts, nullifiers | Public chain; cached by `/api/events` (Arc RPC caps `eth_getLogs` at 10k blocks) |
@@ -64,6 +64,10 @@ npx vitest run            # golden vectors: browser crypto must match prover/*.m
 
 Project root directory: `web`. Required env vars: `DATABASE_URL` (Neon, pooled connection string) and
 `SESSION_SECRET` (32+ random bytes, hex). The schema is created on the first API request.
+
+`RELAYER_PRIVATE_KEY` enables the relayer (`GET /api/relay` quotes, `POST /api/relay` submits). It only accepts USDC
+transactions: withdrawals, and deposits carrying an EIP-3009 or Permit2 signature. Use a dedicated key holding only gas money; fees
+are paid back to it from each transaction. Without it, USDC deposits and withdrawals fail with 503; EURC is unaffected.
 
 `VITE_WALLETCONNECT_PROJECT_ID` (from cloud.reown.com) enables RainbowKit's full wallet list including
 WalletConnect / mobile wallets. Without it only browser-extension wallets are offered and a console warning says so.

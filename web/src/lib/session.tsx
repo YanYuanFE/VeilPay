@@ -16,7 +16,7 @@ import { wagmiConfig } from './wagmi'
 
 export type Me = {
   address: Address | null
-  orgs: { id: string; name: string; created_at: string }[]
+  orgs: { id: string; name: string; asset: string; created_at: string }[]
   memberships: { id: string; name: string; org_id: string; org_name: string; owner_tag: string | null; joined_at: string | null }[]
 }
 
