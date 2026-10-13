@@ -19,7 +19,6 @@ interface Vm {
     function expectRevert(bytes calldata) external;
     function expectRevert() external;
     function envUint(string calldata) external view returns (uint256);
-    function envOr(string calldata, address) external view returns (address);
     function addr(uint256) external pure returns (address);
     function sign(uint256, bytes32) external pure returns (uint8, bytes32, bytes32);
     function etch(address, bytes calldata) external;
