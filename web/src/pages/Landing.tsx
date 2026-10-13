@@ -239,9 +239,9 @@ const PHASES: { tag: string; title: string; status: 'live' | 'next' | 'later'; i
   {
     tag: 'Now', title: 'Private payroll on Arc mainnet', status: 'live',
     items: [
-      'ZK vault with Groth16 proofs verified on-chain',
+      'Live on Arc mainnet: an ownerless ZK vault with Groth16 proofs verified on-chain',
       'Notes sealed to each employee; balances decrypted in the browser',
-      'USDC, EURC or any ERC-20 per organization; payroll transactions don’t reveal which token moved',
+      'USDC, EURC or any ERC-20 per organization; anyone can register a token, and payroll transactions don’t reveal which token moved',
       'No gas for users: a relayer submits USDC transactions, and a deposit is one EIP-3009 signature with no approval',
       'Organizations, CSV roster import, 15 people per payroll transaction with safe resume',
       'Private verification links for landlords, banks and auditors',
@@ -256,11 +256,12 @@ const PHASES: { tag: string; title: string; status: 'live' | 'next' | 'later'; i
     ],
   },
   {
-    tag: 'Then', title: 'Mainnet', status: 'next',
+    tag: 'Then', title: 'Scale', status: 'next',
     items: [
-      'Roster names and emails encrypted per person, with crypto-shredding on removal',
       'Fund payroll with USDC from any chain through Circle Gateway; withdraw to other chains through CCTP',
-      'Launch with USDC on Arc mainnet',
+      'Gasless transactions for every payroll token, with relayer fees paid in that token',
+      'More than one relayer, so no single operator can see or delay every withdrawal',
+      'Roster names and emails encrypted per person, with crypto-shredding on removal',
     ],
   },
   {
@@ -357,7 +358,7 @@ function Footer() {
         </div>
         <div className="eyebrow flex flex-wrap items-center justify-between gap-4 border-t border-hairline pt-6">
           <span>© 2026 VeilPay</span>
-          <span>Built on {arc.name} · not audited</span>
+          <span>Built on {arc.name}</span>
         </div>
       </div>
     </footer>
